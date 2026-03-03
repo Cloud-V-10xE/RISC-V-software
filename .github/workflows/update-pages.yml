@@ -228,7 +228,7 @@ jobs:
           # ─────────────────────────────────────────────
           JS='
           (function() {
-            // ── Dark mode ──
+            // ── Dark mode — apply immediately to avoid flash ──
             const root = document.documentElement;
             const saved = localStorage.getItem("theme") || "light";
             root.setAttribute("data-theme", saved);
@@ -238,6 +238,13 @@ jobs:
               root.setAttribute("data-theme", next);
               localStorage.setItem("theme", next);
             }
+
+            // ── Wire theme button as soon as it exists in DOM ──
+            // Uses event delegation on document so it works on every page
+            // regardless of when the script runs relative to DOM state.
+            document.addEventListener("click", function(e) {
+              if (e.target.closest(".theme-btn")) toggleTheme();
+            });
 
             // ── View toggle ──
             const savedView = localStorage.getItem("view") || "grid";
@@ -271,7 +278,6 @@ jobs:
                   card.classList.toggle("pkg-hidden", !match);
                   if (match) visible++;
                 });
-                // Show/hide category sections
                 document.querySelectorAll(".category-section").forEach(section => {
                   const hasVisible = section.querySelectorAll(".pkg-card:not(.pkg-hidden)").length > 0;
                   section.style.display = hasVisible ? "" : "none";
@@ -282,10 +288,6 @@ jobs:
             }
 
             document.addEventListener("DOMContentLoaded", function() {
-              // Wire theme button
-              document.querySelectorAll(".theme-btn").forEach(btn => {
-                btn.addEventListener("click", toggleTheme);
-              });
               // Wire view buttons
               document.querySelectorAll(".view-btn").forEach(btn => {
                 btn.addEventListener("click", function() { toggleView(this.dataset.view); });
