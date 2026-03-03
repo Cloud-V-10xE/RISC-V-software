@@ -187,3 +187,10 @@ jobs:
         with:
           name: build-log-${{ steps.get-version.outputs.pytorch_version }}
           path: ${{ github.workspace }}/build.log
+
+      - name: Trigger Pages update
+        if: success()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: update-pages
