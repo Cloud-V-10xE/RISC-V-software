@@ -4,7 +4,6 @@ on:
   repository_dispatch:
     types: [update-pages]
   workflow_dispatch:
-  # Also rebuild pages after every central release
   workflow_run:
     workflows: ["Central Release"]
     types: [completed]
@@ -33,19 +32,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p _site
-
-          # Fetch all releases (up to 100)
           gh api "repos/$GH_REPO/releases?per_page=100" > /tmp/all_releases.json
-
           echo "Fetched $(jq length /tmp/all_releases.json) releases"
 
       - name: Generate site
         env:
           GH_REPO: ${{ github.repository }}
         run: |
-          # ─────────────────────────────────────────────
-          # Package metadata — name, category, description
-          # ─────────────────────────────────────────────
           declare -A PKG_LABEL=(
             [gcc]="GCC"
             [coreutils]="Coreutils"
@@ -53,7 +46,7 @@ jobs:
             [strace]="strace"
             [nodejs]="Node.js"
             [openjdk]="OpenJDK"
-            [dotnet-sdk]="\.NET SDK"
+            [dotnet-sdk]=".NET SDK"
             [pytorch]="PyTorch"
             [transformers]="Transformers"
             [onnxruntime]="ONNX Runtime"
@@ -96,72 +89,211 @@ jobs:
 
           ALL_PKGS=(gcc coreutils binutils strace nodejs openjdk dotnet-sdk pytorch transformers onnxruntime tensorflow bazelisk kubernetes)
 
-          # Base path for GitHub Pages — repo name as subpath
           BASE="/RISC-V-softwares"
 
           # ─────────────────────────────────────────────
-          # CSS shared across all pages
+          # CSS — light + dark mode via [data-theme]
           # ─────────────────────────────────────────────
           CSS='
           @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap");
           *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
           :root {
-            --bg: #fafafa;
-            --surface: #ffffff;
-            --border: #e2e2e2;
-            --border-strong: #c8c8c8;
-            --text: #1a1a1a;
-            --text-muted: #666;
-            --text-faint: #999;
-            --accent: #0066cc;
-            --accent-hover: #0052a3;
-            --green: #1a7f37;
-            --mono: "IBM Plex Mono", monospace;
-            --sans: "IBM Plex Sans", sans-serif;
+            --bg: #fafafa; --surface: #ffffff; --border: #e2e2e2;
+            --text: #1a1a1a; --text-muted: #666; --text-faint: #999;
+            --accent: #0066cc; --accent-hover: #0052a3; --green: #1a7f37;
+            --thead: #f3f3f3; --row-hover: #f7f7f7; --card-hover: #f5f8ff;
+            --input-bg: #ffffff; --code-bg: #1e1e1e;
+            --mono: "IBM Plex Mono", monospace; --sans: "IBM Plex Sans", sans-serif;
           }
-          body { font-family: var(--sans); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
+          [data-theme="dark"] {
+            --bg: #0d1117; --surface: #161b22; --border: #30363d;
+            --text: #e6edf3; --text-muted: #8b949e; --text-faint: #484f58;
+            --accent: #58a6ff; --accent-hover: #79b8ff; --green: #3fb950;
+            --thead: #1c2128; --row-hover: #1c2128; --card-hover: #1c2128;
+            --input-bg: #21262d; --code-bg: #161b22;
+          }
+
+          body { font-family: var(--sans); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; transition: background 0.2s, color 0.2s; }
           a { color: var(--accent); text-decoration: none; }
           a:hover { text-decoration: underline; color: var(--accent-hover); }
-          .site-header { border-bottom: 1px solid var(--border); background: var(--surface); padding: 0 24px; }
+
+          /* ── Header ── */
+          .site-header { border-bottom: 1px solid var(--border); background: var(--surface); padding: 0 24px; position: sticky; top: 0; z-index: 100; }
           .header-inner { max-width: 960px; margin: 0 auto; display: flex; align-items: center; gap: 16px; height: 52px; }
-          .site-logo { font-family: var(--mono); font-size: 15px; font-weight: 500; color: var(--text); letter-spacing: -0.3px; }
+          .site-logo { font-family: var(--mono); font-size: 15px; font-weight: 500; color: var(--text); letter-spacing: -0.3px; flex-shrink: 0; }
           .site-logo span { color: var(--accent); }
-          .header-sub { color: var(--text-muted); font-size: 13px; border-left: 1px solid var(--border); padding-left: 16px; }
+          .header-sub { color: var(--text-muted); font-size: 13px; border-left: 1px solid var(--border); padding-left: 16px; flex-shrink: 0; }
+          .header-spacer { flex: 1; }
+          .header-actions { display: flex; align-items: center; gap: 8px; }
+
+          /* ── Dark mode toggle ── */
+          .theme-btn {
+            background: none; border: 1px solid var(--border); border-radius: 4px;
+            color: var(--text-muted); cursor: pointer; padding: 4px 8px;
+            font-family: var(--mono); font-size: 12px; transition: all 0.15s;
+          }
+          .theme-btn:hover { border-color: var(--accent); color: var(--accent); }
+          .theme-btn .icon-light { display: none; }
+          .theme-btn .icon-dark  { display: inline; }
+          [data-theme="dark"] .theme-btn .icon-light { display: inline; }
+          [data-theme="dark"] .theme-btn .icon-dark  { display: none; }
+
+          /* ── View toggle (grid / list) ── */
+          .view-btn {
+            background: none; border: 1px solid var(--border); border-radius: 4px;
+            color: var(--text-muted); cursor: pointer; padding: 4px 8px;
+            font-family: var(--mono); font-size: 12px; transition: all 0.15s;
+          }
+          .view-btn:hover { border-color: var(--accent); color: var(--accent); }
+          .view-btn.active { border-color: var(--accent); color: var(--accent); background: var(--card-hover); }
+
+          /* ── Search bar ── */
+          .search-wrap { margin-bottom: 24px; position: relative; }
+          .search-input {
+            width: 100%; padding: 9px 12px 9px 36px;
+            border: 1px solid var(--border); border-radius: 4px;
+            background: var(--input-bg); color: var(--text);
+            font-family: var(--mono); font-size: 13px;
+            outline: none; transition: border-color 0.15s;
+          }
+          .search-input:focus { border-color: var(--accent); }
+          .search-input::placeholder { color: var(--text-faint); }
+          .search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text-faint); font-size: 14px; pointer-events: none; }
+          .no-results { display: none; color: var(--text-muted); font-size: 13px; padding: 16px 0; font-family: var(--mono); }
+
+          /* ── Layout ── */
           .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
           .breadcrumb { font-family: var(--mono); font-size: 12px; color: var(--text-muted); margin-bottom: 24px; }
           .breadcrumb a { color: var(--text-muted); }
           .breadcrumb a:hover { color: var(--accent); }
           .breadcrumb span { color: var(--text-faint); margin: 0 6px; }
           h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
-          h2 { font-size: 15px; font-weight: 500; margin-bottom: 16px; color: var(--text); }
           .page-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 28px; }
-          table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); margin-bottom: 32px; }
-          thead { background: #f3f3f3; }
-          th { font-family: var(--mono); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; text-align: left; color: var(--text-muted); border-bottom: 1px solid var(--border); }
-          td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
-          tr:last-child td { border-bottom: none; }
-          tr:hover td { background: #f7f7f7; }
-          .mono { font-family: var(--mono); font-size: 12px; }
-          .badge { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 3px; border: 1px solid var(--border); background: #f3f3f3; color: var(--text-muted); }
-          .badge-green { border-color: #b7dfb8; background: #f0faf0; color: var(--green); }
-          .dl-btn { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); white-space: nowrap; }
-          .dl-btn:hover { background: var(--accent); color: white; text-decoration: none; }
+          .updated { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-bottom: 24px; }
+
+          /* ── Category label ── */
+          .category-section { margin-bottom: 8px; }
           .category-label { font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; padding: 20px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
-          .pkg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-bottom: 32px; }
-          .pkg-card { background: var(--surface); padding: 16px 18px; transition: background 0.1s; }
-          .pkg-card:hover { background: #f5f8ff; }
-          .pkg-card-name { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+
+          /* ── Grid view (default) ── */
+          .pkg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-bottom: 4px; }
+          .pkg-card { background: var(--surface); padding: 16px 18px; transition: background 0.1s; display: block; color: inherit; text-decoration: none; }
+          .pkg-card:hover { background: var(--card-hover); text-decoration: none; }
+          .pkg-card-name { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-bottom: 4px; color: var(--text); }
           .pkg-card-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
           .pkg-card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-          .install-block { background: #1e1e1e; border-radius: 4px; padding: 14px 16px; margin: 8px 0 20px; }
-          .install-block code { font-family: var(--mono); font-size: 12px; color: #d4d4d4; display: block; line-height: 1.8; white-space: pre; }
-          .install-block .comment { color: #6a9955; }
+
+          /* ── List view ── */
+          body.list-view .pkg-grid { display: block; background: none; border: 1px solid var(--border); }
+          body.list-view .pkg-card { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+          body.list-view .pkg-card:last-child { border-bottom: none; }
+          body.list-view .pkg-card-name { min-width: 120px; margin-bottom: 0; font-size: 13px; }
+          body.list-view .pkg-card-desc { margin-bottom: 0; flex: 1; }
+          body.list-view .pkg-card-meta { margin-left: auto; flex-shrink: 0; }
+
+          /* ── Tables ── */
+          table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); margin-bottom: 32px; }
+          thead { background: var(--thead); }
+          th { font-family: var(--mono); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; text-align: left; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+          td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; color: var(--text); }
+          tr:last-child td { border-bottom: none; }
+          tr:hover td { background: var(--row-hover); }
+
+          /* ── Badges & buttons ── */
+          .mono { font-family: var(--mono); font-size: 12px; }
+          .badge { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 3px; border: 1px solid var(--border); background: var(--thead); color: var(--text-muted); }
+          .badge-green { border-color: #2ea04326; background: #1f6feb1a; color: var(--green); }
+          .dl-btn { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); white-space: nowrap; }
+          .dl-btn:hover { background: var(--accent); color: #fff; text-decoration: none; }
+
+          /* ── Content blocks ── */
           .section-title { font-size: 13px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-family: var(--mono); margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
           .doc-block { background: var(--surface); border: 1px solid var(--border); border-radius: 3px; padding: 20px 24px; margin-bottom: 24px; font-size: 13px; line-height: 1.8; color: var(--text-muted); }
           .doc-block p { margin-bottom: 10px; }
           .doc-block p:last-child { margin-bottom: 0; }
+          .install-block { background: var(--code-bg); border-radius: 4px; padding: 14px 16px; margin: 8px 0 20px; border: 1px solid var(--border); }
+          .install-block code { font-family: var(--mono); font-size: 12px; color: #d4d4d4; display: block; line-height: 1.8; white-space: pre; }
+          .install-block .comment { color: #6a9955; }
+
+          /* ── Footer ── */
           .footer { border-top: 1px solid var(--border); padding: 20px 24px; text-align: center; font-size: 12px; color: var(--text-faint); font-family: var(--mono); margin-top: 40px; }
-          .updated { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-bottom: 24px; }
+
+          /* ── Hide filtered items ── */
+          .pkg-hidden { display: none !important; }
+          '
+
+          # ─────────────────────────────────────────────
+          # JS — dark mode + search + view toggle
+          # ─────────────────────────────────────────────
+          JS='
+          (function() {
+            // ── Dark mode ──
+            const root = document.documentElement;
+            const saved = localStorage.getItem("theme") || "light";
+            root.setAttribute("data-theme", saved);
+
+            function toggleTheme() {
+              const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+              root.setAttribute("data-theme", next);
+              localStorage.setItem("theme", next);
+            }
+
+            // ── View toggle ──
+            const savedView = localStorage.getItem("view") || "grid";
+            if (savedView === "list") document.body.classList.add("list-view");
+
+            function toggleView(mode) {
+              if (mode === "list") {
+                document.body.classList.add("list-view");
+                localStorage.setItem("view", "list");
+              } else {
+                document.body.classList.remove("list-view");
+                localStorage.setItem("view", "grid");
+              }
+              document.querySelectorAll(".view-btn").forEach(b => {
+                b.classList.toggle("active", b.dataset.view === mode);
+              });
+            }
+
+            // ── Search ──
+            function initSearch() {
+              const input = document.getElementById("pkg-search");
+              if (!input) return;
+              input.addEventListener("input", function() {
+                const q = this.value.trim().toLowerCase();
+                let visible = 0;
+                document.querySelectorAll(".pkg-card").forEach(card => {
+                  const name = (card.dataset.name || "").toLowerCase();
+                  const desc = (card.dataset.desc || "").toLowerCase();
+                  const cat  = (card.dataset.cat  || "").toLowerCase();
+                  const match = !q || name.includes(q) || desc.includes(q) || cat.includes(q);
+                  card.classList.toggle("pkg-hidden", !match);
+                  if (match) visible++;
+                });
+                // Show/hide category sections
+                document.querySelectorAll(".category-section").forEach(section => {
+                  const hasVisible = section.querySelectorAll(".pkg-card:not(.pkg-hidden)").length > 0;
+                  section.style.display = hasVisible ? "" : "none";
+                });
+                const noRes = document.getElementById("no-results");
+                if (noRes) noRes.style.display = visible === 0 ? "block" : "none";
+              });
+            }
+
+            document.addEventListener("DOMContentLoaded", function() {
+              // Wire theme button
+              document.querySelectorAll(".theme-btn").forEach(btn => {
+                btn.addEventListener("click", toggleTheme);
+              });
+              // Wire view buttons
+              document.querySelectorAll(".view-btn").forEach(btn => {
+                btn.addEventListener("click", function() { toggleView(this.dataset.view); });
+                btn.classList.toggle("active", btn.dataset.view === savedView);
+              });
+              initSearch();
+            });
+          })();
           '
 
           # ─────────────────────────────────────────────
@@ -169,13 +301,27 @@ jobs:
           # ─────────────────────────────────────────────
           page_head() {
             local title="$1"
+            local show_controls="${2:-false}"
             echo "<!DOCTYPE html><html lang='en'><head>"
             echo "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             echo "<title>${title} — Cloud-V RISC-V Packages</title>"
-            echo "<style>${CSS}</style></head><body>"
+            echo "<style>${CSS}</style>"
+            echo "<script>${JS}</script>"
+            echo "</head><body>"
             echo "<header class='site-header'><div class='header-inner'>"
             echo "<a class='site-logo' href='${BASE}/' style='color:inherit;text-decoration:none;'>Cloud-V <span>/</span> RISC-V Packages</a>"
             echo "<div class='header-sub'>Prebuilt binaries for RISC-V 64-bit Linux</div>"
+            echo "<div class='header-spacer'></div>"
+            echo "<div class='header-actions'>"
+            if [ "$show_controls" = "true" ]; then
+              echo "<button class='view-btn' data-view='grid' title='Grid view'>⊞ Grid</button>"
+              echo "<button class='view-btn' data-view='list' title='List view'>≡ List</button>"
+            fi
+            echo "<button class='theme-btn' title='Toggle dark mode'>"
+            echo "<span class='icon-dark'>☾ Dark</span>"
+            echo "<span class='icon-light'>☀ Light</span>"
+            echo "</button>"
+            echo "</div>"
             echo "</div></header>"
           }
 
@@ -187,10 +333,8 @@ jobs:
           # ─────────────────────────────────────────────
           # Build per-package release data from API
           # ─────────────────────────────────────────────
-          # Map release assets to packages
           for PKG in "${ALL_PKGS[@]}"; do
             mkdir -p "_site/${PKG}"
-            # Extract assets matching this package from all releases
             jq --arg pkg "$PKG" '[
               .[] | {
                 tag: .tag_name,
@@ -205,34 +349,40 @@ jobs:
           # INDEX PAGE
           # ─────────────────────────────────────────────
           {
-            page_head "Package Index"
+            page_head "Package Index" "true"
             echo "<div class='container'>"
             echo "<div class='breadcrumb'><a href='${BASE}/'>cloud-v-10xe.github.io/RISC-V-softwares</a></div>"
             echo "<h1>RISC-V Package Archive</h1>"
             echo "<p class='page-desc'>Prebuilt binaries for RISC-V 64-bit Linux (riscv64). All packages are built from upstream sources on native RISC-V hardware.</p>"
             echo "<div class='updated'>Last updated: $(date -u '+%Y-%m-%d %H:%M UTC')</div>"
 
-            # Group by category
-            declare -A CATEGORIES_DONE
+            # Search bar
+            echo "<div class='search-wrap'>"
+            echo "<span class='search-icon'>🔍</span>"
+            echo "<input class='search-input' id='pkg-search' type='text' placeholder='Search packages — e.g. gcc, pytorch, nodejs...' autocomplete='off'>"
+            echo "</div>"
+            echo "<div class='no-results' id='no-results'>No packages match your search.</div>"
+
             for CAT in "Compilers & Toolchains" "Runtimes" "ML Frameworks" "Build Tools" "Infrastructure"; do
+              echo "<div class='category-section'>"
               echo "<div class='category-label'>${CAT}</div>"
               echo "<div class='pkg-grid'>"
               for PKG in "${ALL_PKGS[@]}"; do
                 if [ "${PKG_CATEGORY[$PKG]}" = "$CAT" ]; then
-                  # Get latest version
-                  LATEST=$(jq -r '.[0].tag // "—"' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "—")
+                  LATEST=$(jq -r '.[0].tag // ""' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "")
                   COUNT=$(jq 'length' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "0")
-                  echo "<a class='pkg-card' href='${BASE}/${PKG}/' style='display:block;color:inherit;text-decoration:none;'>"
+                  echo "<a class='pkg-card' href='${BASE}/${PKG}/' data-name='${PKG}' data-desc='${PKG_DESC[$PKG]}' data-cat='${CAT}'>"
                   echo "<div class='pkg-card-name'>${PKG_LABEL[$PKG]}</div>"
                   echo "<div class='pkg-card-desc'>${PKG_DESC[$PKG]}</div>"
                   echo "<div class='pkg-card-meta'>"
-                  if [ "$LATEST" != "—" ]; then
+                  if [ -n "$LATEST" ]; then
                     echo "<span class='badge badge-green'>${LATEST}</span>"
                   fi
                   echo "<span class='badge'>${COUNT} release(s)</span>"
                   echo "</div></a>"
                 fi
               done
+              echo "</div>"
               echo "</div>"
             done
 
@@ -241,7 +391,7 @@ jobs:
           } > _site/index.html
 
           # ─────────────────────────────────────────────
-          # PER-PACKAGE INDEX PAGE  (e.g. /gcc/)
+          # PER-PACKAGE INDEX PAGE
           # ─────────────────────────────────────────────
           for PKG in "${ALL_PKGS[@]}"; do
             LABEL="${PKG_LABEL[$PKG]}"
@@ -249,26 +399,23 @@ jobs:
             RELEASES_FILE="/tmp/${PKG}_releases.json"
             COUNT=$(jq 'length' "$RELEASES_FILE" 2>/dev/null || echo "0")
 
-            # Read doc file if it exists
             DOC_CONTENT=""
             if [ -f "docs/${PKG}/README.md" ]; then
               DOC_CONTENT=$(cat "docs/${PKG}/README.md")
             fi
 
             {
-              page_head "$LABEL"
+              page_head "$LABEL" "false"
               echo "<div class='container'>"
               echo "<div class='breadcrumb'><a href='${BASE}/'>index</a><span>/</span>${PKG}</div>"
               echo "<h1>${LABEL}</h1>"
               echo "<p class='page-desc'>${DESC}</p>"
 
-              # Doc block
               if [ -n "$DOC_CONTENT" ]; then
                 echo "<div class='section-title'>About</div>"
-                echo "<div class='doc-block'><p>$(echo "$DOC_CONTENT" | head -20 | sed 's/^#.*$//' | sed '/^$/d' | head -5 | tr '\n' ' ')</p></div>"
+                echo "<div class='doc-block'><p>$(echo "$DOC_CONTENT" | sed 's/^#.*$//' | sed '/^$/d' | head -5 | tr '\n' ' ')</p></div>"
               fi
 
-              # Releases table
               echo "<div class='section-title'>Releases (${COUNT})</div>"
               if [ "$COUNT" -gt 0 ]; then
                 echo "<table><thead><tr><th>Version / Tag</th><th>Date</th><th>Assets</th><th></th></tr></thead><tbody>"
@@ -290,9 +437,9 @@ jobs:
               page_foot
             } > "_site/${PKG}/index.html"
 
-            # ───────────────────────────────────────────
-            # PER-VERSION PAGE  (e.g. /gcc/14.2.0/)
-            # ───────────────────────────────────────────
+            # ─────────────────────────────────────────
+            # PER-VERSION PAGE
+            # ─────────────────────────────────────────
             jq -c '.[]' "$RELEASES_FILE" | while read -r RELEASE; do
               TAG=$(echo "$RELEASE" | jq -r '.tag')
               DATE=$(echo "$RELEASE" | jq -r '.date' | cut -c1-10)
@@ -301,17 +448,15 @@ jobs:
               mkdir -p "_site/${PKG}/${TAG}"
 
               {
-                page_head "${LABEL} ${TAG}"
+                page_head "${LABEL} ${TAG}" "false"
                 echo "<div class='container'>"
                 echo "<div class='breadcrumb'><a href='${BASE}/'>index</a><span>/</span><a href='${BASE}/${PKG}/'>${PKG}</a><span>/</span>${TAG}</div>"
                 echo "<h1>${LABEL} <span style='font-weight:300;color:var(--text-muted)'>${TAG}</span></h1>"
                 echo "<p class='page-desc'>Released ${DATE} · <a href='${RURL}'>View GitHub Release</a></p>"
 
-                # Assets table
                 echo "<div class='section-title'>Downloads</div>"
                 echo "<table><thead><tr><th>Filename</th><th>Size</th><th></th></tr></thead><tbody>"
                 echo "$RELEASE" | jq -r '.assets[] | "\(.name)\t\(.size)\t\(.url)"' | while IFS=$'\t' read -r FNAME FSIZE FURL; do
-                  # Convert bytes to human readable
                   if [ "$FSIZE" -gt 1048576 ]; then
                     HSIZE="$(echo "scale=1; $FSIZE/1048576" | bc) MB"
                   elif [ "$FSIZE" -gt 1024 ]; then
@@ -327,7 +472,6 @@ jobs:
                 done
                 echo "</tbody></table>"
 
-                # Install instructions
                 echo "<div class='section-title'>Installation</div>"
                 echo "<div class='install-block'><code>"
                 echo "<span class='comment'># Download</span>"
@@ -335,7 +479,6 @@ jobs:
                 FIRST_URL=$(echo "$RELEASE" | jq -r '.assets[0].url // ""')
                 if [ -n "$FIRST_URL" ]; then
                   echo "wget ${FIRST_URL}"
-                  # Detect type and give appropriate install instructions
                   if echo "$FIRST_ASSET" | grep -q "\.tar\.gz$"; then
                     echo ""
                     echo "<span class='comment'># Extract</span>"
@@ -356,11 +499,9 @@ jobs:
                 fi
                 echo "</code></div>"
 
-                # Doc block
                 if [ -f "docs/${PKG}/README.md" ]; then
                   echo "<div class='section-title'>Documentation</div>"
                   echo "<div class='doc-block'>"
-                  # Render markdown as plain paragraphs (simple conversion)
                   grep -v '^#' "docs/${PKG}/README.md" | grep -v '^```' | grep -v '^$' | head -30 | while read -r LINE; do
                     echo "<p>${LINE}</p>"
                   done
