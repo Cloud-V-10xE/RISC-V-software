@@ -8,20 +8,13 @@ on:
         required: false
         default: 'latest'
   schedule:
-    # Run monthly on the 12th at midnight
     - cron: "0 0 12 * *"
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/build-etcd.yml'
 
 env:
   REGISTRY: docker.io
   DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}
 
 jobs:
-  # Get versions to build
   get-versions:
     runs-on: ubuntu-latest
     outputs:
@@ -36,15 +29,14 @@ jobs:
           else
             ETCD_VERSION="${{ github.event.inputs.etcd_version }}"
           fi
-          
+
           ETCD_TAG="${ETCD_VERSION#v}"
-          
+
           echo "etcd_version=$ETCD_VERSION" >> "$GITHUB_OUTPUT"
           echo "etcd_tag=$ETCD_TAG" >> "$GITHUB_OUTPUT"
-          
+
           echo "Building etcd: $ETCD_VERSION"
 
-  # Build etcd for x86
   build-etcd-x86:
     needs: get-versions
     runs-on: ubuntu-latest
@@ -63,55 +55,44 @@ jobs:
 
       - name: Clone etcd repository
         run: |
-          git clone --depth=1 --branch ${{ needs.get-versions.outputs.etcd_version }} https://github.com/etcd-io/etcd.git
+          rm -rf etcd
+          git clone --depth=1 \
+            --branch "${{ needs.get-versions.outputs.etcd_version }}" \
+            https://github.com/etcd-io/etcd.git
 
-      - name: Build etcd for x86_64
+      - name: Build and push etcd for x86_64
         run: |
           cd etcd
-          
-          # Build etcd and etcdctl
           ./scripts/build.sh
-          
-          # Create Dockerfile
+
           mkdir -p /tmp/etcd-build
-          
+
           cat > /tmp/etcd-build/Dockerfile << 'EOF'
           FROM debian:trixie-slim
-          
           RUN apt-get update && \
               apt-get install -y ca-certificates && \
               rm -rf /var/lib/apt/lists/*
-          
           COPY etcd /usr/local/bin/etcd
           COPY etcdctl /usr/local/bin/etcdctl
           COPY etcdutl /usr/local/bin/etcdutl
-          
           RUN chmod +x /usr/local/bin/etcd* && \
               mkdir -p /var/etcd /var/lib/etcd
-          
           EXPOSE 2379 2380
-          
           VOLUME /var/etcd /var/lib/etcd
-          
           ENTRYPOINT ["/usr/local/bin/etcd"]
           EOF
-          
-          # Copy binaries
-          cp bin/etcd /tmp/etcd-build/
-          cp bin/etcdctl /tmp/etcd-build/
-          cp bin/etcdutl /tmp/etcd-build/
-          
-          # Build and push
+
+          cp bin/etcd bin/etcdctl bin/etcdutl /tmp/etcd-build/
+
           cd /tmp/etcd-build
           docker build \
-            --tag ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64 \
-            --tag ${{ env.DOCKERHUB_REPO }}/etcd:latest-amd64 \
+            --tag "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64" \
+            --tag "${{ env.DOCKERHUB_REPO }}/etcd:latest-amd64" \
             .
-          
-          docker push ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64
-          docker push ${{ env.DOCKERHUB_REPO }}/etcd:latest-amd64
 
-  # Build etcd for RISC-V
+          docker push "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64"
+          docker push "${{ env.DOCKERHUB_REPO }}/etcd:latest-amd64"
+
   build-etcd-riscv:
     needs: get-versions
     runs-on: RISCV64
@@ -127,57 +108,52 @@ jobs:
         run: |
           sudo apt update && sudo apt install -y golang
 
+      - name: Clean workspace with elevated permissions
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+
       - name: Clone etcd repository
         run: |
-          rm -rf etcd
-          git clone --depth=1 --branch ${{ needs.get-versions.outputs.etcd_version }} https://github.com/etcd-io/etcd.git
+          git clone --depth=1 \
+            --branch "${{ needs.get-versions.outputs.etcd_version }}" \
+            https://github.com/etcd-io/etcd.git \
+            "$GITHUB_WORKSPACE/etcd"
 
-      - name: Build etcd for RISC-V
+      - name: Build and push etcd for RISC-V
         run: |
-          export PATH=/usr/local/go/bin:$PATH
-
-          cd etcd
-
-          # Build etcd and etcdctl for RISC-V
+          cd "$GITHUB_WORKSPACE/etcd"
           GOARCH=riscv64 ./scripts/build.sh
 
-          # Create Dockerfile
           mkdir -p /tmp/etcd-build
 
           cat > /tmp/etcd-build/Dockerfile << 'EOF'
           FROM riscv64/debian:trixie-slim
-
           RUN apt-get update && \
               apt-get install -y ca-certificates && \
               rm -rf /var/lib/apt/lists/*
-
           COPY etcd /usr/local/bin/etcd
           COPY etcdctl /usr/local/bin/etcdctl
           COPY etcdutl /usr/local/bin/etcdutl
-
           RUN chmod +x /usr/local/bin/etcd* && \
               mkdir -p /var/etcd /var/lib/etcd
-
-          # SET THE UNSUPPORTED ARCH ENV VAR
           ENV ETCD_UNSUPPORTED_ARCH=riscv64
-
           EXPOSE 2379 2380
-
           VOLUME /var/etcd /var/lib/etcd
-
           ENTRYPOINT ["/usr/local/bin/etcd"]
           EOF
-          cd /tmp/etcd-build
 
+          cp bin/etcd bin/etcdctl bin/etcdutl /tmp/etcd-build/
+
+          cd /tmp/etcd-build
           docker build \
-            --tag ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64 \
-            --tag ${{ env.DOCKERHUB_REPO }}/etcd:latest-riscv64 \
+            --tag "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64" \
+            --tag "${{ env.DOCKERHUB_REPO }}/etcd:latest-riscv64" \
             .
 
-          docker push ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64
-          docker push ${{ env.DOCKERHUB_REPO }}/etcd:latest-riscv64
+          docker push "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
+          docker push "${{ env.DOCKERHUB_REPO }}/etcd:latest-riscv64"
 
-  # Create multi-arch manifest
   create-manifests:
     needs: [get-versions, build-etcd-x86, build-etcd-riscv]
     runs-on: ubuntu-latest
@@ -193,56 +169,25 @@ jobs:
 
       - name: Create etcd multi-arch manifest
         run: |
-          # Remove existing manifests if they exist
-          docker manifest rm ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }} 2>/dev/null || true
-          docker manifest rm ${{ env.DOCKERHUB_REPO }}/etcd:latest 2>/dev/null || true
-          
-          # Create versioned manifest
-          docker manifest create ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }} \
-            ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64 \
-            ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64
-          
-          docker manifest push ${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}
-          
-          # Create latest manifest
-          docker manifest create ${{ env.DOCKERHUB_REPO }}/etcd:latest \
-            ${{ env.DOCKERHUB_REPO }}/etcd:latest-amd64 \
-            ${{ env.DOCKERHUB_REPO }}/etcd:latest-riscv64
-          
-          docker manifest push ${{ env.DOCKERHUB_REPO }}/etcd:latest
+          docker manifest rm \
+            "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}" \
+            2>/dev/null || true
+          docker manifest rm \
+            "${{ env.DOCKERHUB_REPO }}/etcd:latest" \
+            2>/dev/null || true
 
-  # Create GitHub Release
-  create-release:
-    needs: [get-versions, create-manifests]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+          docker manifest create \
+            "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}" \
+            "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64" \
+            "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: etcd-${{ needs.get-versions.outputs.etcd_version }}
-          name: etcd ${{ needs.get-versions.outputs.etcd_version }} for RISC-V
-          body: |
-            # etcd ${{ needs.get-versions.outputs.etcd_version }} - RISC-V Support
-            
-            Multi-architecture etcd image for mixed x86/RISC-V Kubernetes clusters.
-            
-            ## 🐧 Images Available
-            
-            All images support both `linux/amd64` and `linux/riscv64`:
-            
-            - `${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}`
-            
-            ## 🚀 Usage
-            
-            This image is automatically pulled when running the control-plane setup script.
-            
-            ## 🔗 Links
-            
-            - [etcd Documentation](https://etcd.io/docs/)
-          draft: false
-          prerelease: false
+          docker manifest push \
+            "${{ env.DOCKERHUB_REPO }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}"
+
+          docker manifest create \
+            "${{ env.DOCKERHUB_REPO }}/etcd:latest" \
+            "${{ env.DOCKERHUB_REPO }}/etcd:latest-amd64" \
+            "${{ env.DOCKERHUB_REPO }}/etcd:latest-riscv64"
+
+          docker manifest push \
+            "${{ env.DOCKERHUB_REPO }}/etcd:latest"
