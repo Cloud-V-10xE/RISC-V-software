@@ -83,6 +83,6 @@
       "label": "CMake",
       "category": "Build Tools",
       "description": "Cross-platform build system generator"
-    },
+    }
   ]
 }
