@@ -195,10 +195,3 @@ jobs:
           body_path: release_notes.md
           files: release_assets/*
           make_latest: true
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
