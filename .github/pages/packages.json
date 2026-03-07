@@ -77,6 +77,12 @@
       "label": "Kubernetes",
       "category": "Infrastructure",
       "description": "Container orchestration system"
-    }
+    },
+    {
+  "id": "cmake",
+  "label": "CMake",
+  "category": "Build Tools",
+  "description": "Cross-platform build system generator"
+    },
   ]
 }
