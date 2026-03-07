@@ -10,6 +10,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set release date
         id: date
         run: |
@@ -21,6 +24,27 @@ jobs:
           sudo apt update
           sudo apt install -y gh jq
 
+      - name: Load package list from packages.json
+        id: pkgs
+        run: |
+          PKGS_JSON=".github/pages/packages.json"
+
+          if [ ! -f "$PKGS_JSON" ]; then
+            echo "ERROR: $PKGS_JSON not found."
+            exit 1
+          fi
+
+          # Extract workflows and ids for packages where central_release == true
+          WORKFLOWS=$(jq -r '.packages[] | select(.central_release == true) | .workflow' "$PKGS_JSON")
+          IDS=$(jq -r '.packages[] | select(.central_release == true) | .id' "$PKGS_JSON")
+
+          echo "Packages included in central release:"
+          echo "$IDS"
+
+          # Write to files so next steps can read them
+          echo "$WORKFLOWS" > /tmp/cr_workflows.txt
+          echo "$IDS"       > /tmp/cr_ids.txt
+
       - name: Download latest artifacts dynamically
         env:
           GH_TOKEN: ${{ github.token }}
@@ -28,17 +52,10 @@ jobs:
         run: |
           mkdir -p release_assets
 
-          WORKFLOWS=(
-            "build-bazelisk.yml"
-            "build-coreutils.yml"
-            "build-strace.yml"
-            "build-binutils.yml"
-            "build-transformers.yml"
-          )
-
           FAILED_WORKFLOWS=()
 
-          for WF in "${WORKFLOWS[@]}"; do
+          while IFS= read -r WF; do
+            [ -z "$WF" ] && continue
             echo "──────────────────────────────────────"
             echo "Processing workflow: $WF"
 
@@ -59,7 +76,6 @@ jobs:
 
             echo "✅ Found run ID: $LATEST_RUN_ID for $WF"
 
-            # Use gh api instead of gh run view to fetch artifacts
             ARTIFACTS=$(gh api \
               "repos/$GH_REPO/actions/runs/$LATEST_RUN_ID/artifacts" \
               | jq -r '.artifacts[].name')
@@ -77,7 +93,8 @@ jobs:
                 --name "$ART" \
                 -D release_assets
             done
-          done
+
+          done < /tmp/cr_workflows.txt
 
           if [ ${#FAILED_WORKFLOWS[@]} -gt 0 ]; then
             echo ""
@@ -95,17 +112,17 @@ jobs:
       - name: Verify all expected artifacts are present
         id: verify
         run: |
-          EXPECTED=("bazelisk" "coreutils" "strace" "binutils" "transformers")
           MISSING_LIST=()
 
-          for E in "${EXPECTED[@]}"; do
-            if ! ls release_assets/ | grep -qi "$E"; then
-              echo "⚠️  Missing artifact: $E"
-              MISSING_LIST+=("$E")
+          while IFS= read -r ID; do
+            [ -z "$ID" ] && continue
+            if ! ls release_assets/ | grep -qi "$ID"; then
+              echo "⚠️  Missing artifact: $ID"
+              MISSING_LIST+=("$ID")
             else
-              echo "✅ Found artifact: $E"
+              echo "✅ Found artifact: $ID"
             fi
-          done
+          done < /tmp/cr_ids.txt
 
           if [ ${#MISSING_LIST[@]} -gt 0 ]; then
             echo ""
@@ -138,7 +155,17 @@ jobs:
             STATUS_LINE="⚠️ Some artifacts were missing and excluded: \`${MISSING}\`"
           fi
 
-          cat <<EOF > release_notes.md
+          # Build workflow table dynamically from packages.json
+          PKGS_JSON=".github/pages/packages.json"
+          WF_TABLE=""
+          while IFS= read -r row; do
+            ID=$(echo "$row"    | jq -r '.id')
+            LABEL=$(echo "$row" | jq -r '.label')
+            WF=$(echo "$row"    | jq -r '.workflow')
+            WF_TABLE="${WF_TABLE}| ${WF} | ${LABEL} |\n"
+          done < <(jq -c '.packages[] | select(.central_release == true)' "$PKGS_JSON")
+
+          cat << EOF > release_notes.md
           ## RISC-V Binaries — $RELEASE_DATE
 
           Central release bundling the latest successful builds from all RISC-V build workflows.
@@ -150,13 +177,9 @@ jobs:
           $STATUS_LINE
 
           ### Workflows
-          | Workflow | Artifact |
-          |----------|----------|
-          | build-bazelisk.yml | Bazelisk binary |
-          | build-coreutils.yml | Coreutils tarball |
-          | build-strace.yml | strace tarball |
-          | build-binutils.yml | Binutils tarball |
-          | build-transformers.yml | Transformers wheel |
+          | Workflow | Package |
+          |----------|---------|
+          $(echo -e "$WF_TABLE")
 
           ---
           *Generated automatically by the Central Release workflow.*
@@ -172,3 +195,10 @@ jobs:
           body_path: release_notes.md
           files: release_assets/*
           make_latest: true
+
+      - name: Trigger Pages update
+        if: success()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: update-pages
