@@ -277,3 +277,14 @@ tr:hover td { background: var(--row-hover); }
 
 /* ── Search filter ── */
 .pkg-hidden { display: none !important; }
+.log-btn {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.log-btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
