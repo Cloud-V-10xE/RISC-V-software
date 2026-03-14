@@ -268,7 +268,9 @@ jobs:
           # Build the flanneld binary natively — avoids calling the Makefile
           # which internally uses `docker buildx` (not available on this runner).
           # On a native riscv64 machine we don't need cross-compilation at all.
-          CGO_ENABLED=1 go build -o dist/flanneld ./cmd/flanneld
+          # main.go is at the repo root — no cmd/ subdirectory exists
+          mkdir -p dist
+          CGO_ENABLED=1 go build -o dist/flanneld .
 
           # Package the binary into a Docker image manually
           mkdir -p /tmp/flannel-build
