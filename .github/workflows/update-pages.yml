@@ -45,7 +45,7 @@ jobs:
           JS=$(cat .github/pages/script.js)
 
           # ── Base path for GitHub Pages subpath ──
-          BASE="/RISC-V-softwares"
+          BASE="/RISC-V-software"
 
           # ──────────────────────────────────────────────────────────
           # Load package metadata from packages.json
