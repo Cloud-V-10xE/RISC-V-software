@@ -254,6 +254,10 @@ jobs:
             https://github.com/flannel-io/flannel.git \
             "$GITHUB_WORKSPACE/flannel"
 
+      - name: Install Go
+        run: |
+          sudo apt-get update && sudo apt-get install -y golang
+
       - name: Build and push Flannel for RISC-V
         run: |
           cd "$GITHUB_WORKSPACE/flannel"
@@ -261,14 +265,25 @@ jobs:
           ARCH="riscv64"
           IMAGE_REPO="${{ needs.get-versions.outputs.image_repo }}"
 
-          make ARCH=${ARCH} TAG=${TAG} dist/flanneld-${TAG}-${ARCH}.docker
+          # Build the flanneld binary natively — avoids calling the Makefile
+          # which internally uses `docker buildx` (not available on this runner).
+          # On a native riscv64 machine we don't need cross-compilation at all.
+          CGO_ENABLED=1 go build -o dist/flanneld ./cmd/flanneld
 
-          LOAD_OUTPUT=$(docker load -i "dist/flanneld-${TAG}-${ARCH}.docker")
-          echo "$LOAD_OUTPUT"
-          LOADED_IMAGE=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image: //p')
+          # Package the binary into a Docker image manually
+          mkdir -p /tmp/flannel-build
+          cp dist/flanneld /tmp/flannel-build/
 
-          docker tag "${LOADED_IMAGE}" "${IMAGE_REPO}/flannel:${TAG}-${ARCH}"
-          docker tag "${LOADED_IMAGE}" "${IMAGE_REPO}/flannel:latest-${ARCH}"
+          cat > /tmp/flannel-build/Dockerfile << 'EOF'
+          FROM riscv64/debian:trixie-slim
+          RUN apt-get update &&               apt-get install -y ca-certificates iproute2 iptables &&               rm -rf /var/lib/apt/lists/*
+          COPY flanneld /opt/bin/flanneld
+          RUN chmod +x /opt/bin/flanneld
+          ENTRYPOINT ["/opt/bin/flanneld"]
+          EOF
+
+          cd /tmp/flannel-build
+          docker build             --tag "${IMAGE_REPO}/flannel:${TAG}-${ARCH}"             --tag "${IMAGE_REPO}/flannel:latest-${ARCH}"             .
 
           docker push "${IMAGE_REPO}/flannel:${TAG}-${ARCH}"
           docker push "${IMAGE_REPO}/flannel:latest-${ARCH}"
