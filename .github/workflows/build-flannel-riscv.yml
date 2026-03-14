@@ -1,55 +1,47 @@
-name: Build Flannel Images for RISC-V and x86
+name: Build etcd Images for RISC-V and x86
 
 on:
   workflow_dispatch:
     inputs:
-      flannel_version:
-        description: 'Flannel version (e.g., v0.26.2)'
+      etcd_version:
+        description: 'etcd version (e.g., v3.5.17)'
         required: false
         default: 'latest'
-      pause_version:
-        description: 'Pause container version'
-        required: false
-        default: '3.10'
   schedule:
-    - cron: "0 0 15 * *"
+    - cron: "0 0 12 * *"
 
 env:
-  REGISTRY: docker.io
-  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}
+  REGISTRY: ghcr.io
 
 jobs:
   get-versions:
     runs-on: ubuntu-latest
     outputs:
-      flannel_version: ${{ steps.versions.outputs.flannel_version }}
-      flannel_tag: ${{ steps.versions.outputs.flannel_tag }}
-      pause_version: ${{ steps.versions.outputs.pause_version }}
+      etcd_version: ${{ steps.versions.outputs.etcd_version }}
+      etcd_tag: ${{ steps.versions.outputs.etcd_tag }}
+      image_repo: ${{ steps.versions.outputs.image_repo }}
     steps:
       - name: Get latest versions
         id: versions
         run: |
-          if [ "${{ github.event.inputs.flannel_version }}" = "latest" ] || [ -z "${{ github.event.inputs.flannel_version }}" ]; then
-            FLANNEL_VERSION=$(curl -s https://api.github.com/repos/flannel-io/flannel/releases/latest | jq -r '.tag_name')
+          if [ "${{ github.event.inputs.etcd_version }}" = "latest" ] || [ -z "${{ github.event.inputs.etcd_version }}" ]; then
+            ETCD_VERSION=$(curl -s https://api.github.com/repos/etcd-io/etcd/releases/latest | jq -r '.tag_name')
           else
-            FLANNEL_VERSION="${{ github.event.inputs.flannel_version }}"
+            ETCD_VERSION="${{ github.event.inputs.etcd_version }}"
           fi
 
-          PAUSE_VERSION="${{ github.event.inputs.pause_version }}"
-          if [ -z "$PAUSE_VERSION" ]; then
-            PAUSE_VERSION="3.10"
-          fi
+          ETCD_TAG="${ETCD_VERSION#v}"
 
-          FLANNEL_TAG="${FLANNEL_VERSION#v}"
+          # Lowercase the repo owner — GHCR requires all image names to be lowercase
+          IMAGE_REPO="ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
 
-          echo "flannel_version=$FLANNEL_VERSION" >> "$GITHUB_OUTPUT"
-          echo "flannel_tag=$FLANNEL_TAG" >> "$GITHUB_OUTPUT"
-          echo "pause_version=$PAUSE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "etcd_version=$ETCD_VERSION" >> "$GITHUB_OUTPUT"
+          echo "etcd_tag=$ETCD_TAG" >> "$GITHUB_OUTPUT"
+          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
 
-          echo "Building Flannel: $FLANNEL_VERSION"
-          echo "Building Pause: $PAUSE_VERSION"
+          echo "Building etcd: $ETCD_VERSION"
 
-  build-pause-x86:
+  build-etcd-x86:
     needs: get-versions
     runs-on: ubuntu-latest
     permissions:
@@ -59,434 +51,150 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to DockerHub
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push pause for x86
+      - name: Clone etcd repository
         run: |
-          mkdir -p pause-build && cd pause-build
+          rm -rf etcd
+          git clone --depth=1 \
+            --branch "${{ needs.get-versions.outputs.etcd_version }}" \
+            https://github.com/etcd-io/etcd.git
 
-          cat > pause.c << 'PAUSE_C'
-          #include <signal.h>
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <sys/types.h>
-          #include <sys/wait.h>
-          #include <unistd.h>
-          static void sigdown(int signo) {
-            psignal(signo, "Shutting down, got signal");
-            exit(0);
-          }
-          static void sigreap(int signo) {
-            while (waitpid(-1, NULL, WNOHANG) > 0);
-          }
-          int main() {
-            if (getpid() != 1) {
-              fprintf(stderr, "Warning: pause should run as PID 1\n");
-            }
-            signal(SIGINT, sigdown);
-            signal(SIGTERM, sigdown);
-            signal(SIGCHLD, sigreap);
-            for (;;) pause();
-            return 0;
-          }
-          PAUSE_C
+      - name: Build and push etcd for x86_64
+        run: |
+          cd etcd
+          ./scripts/build.sh
 
-          cat > Dockerfile << 'EOF'
-          FROM golang:1.22-alpine AS builder
-          WORKDIR /build
-          COPY pause.c .
-          RUN apk add --no-cache gcc musl-dev && \
-              gcc -static -o /pause pause.c && \
-              strip /pause
-          FROM scratch
-          COPY --from=builder /pause /pause
-          ENTRYPOINT ["/pause"]
+          mkdir -p /tmp/etcd-build
+
+          cat > /tmp/etcd-build/Dockerfile << 'EOF'
+          FROM debian:trixie-slim
+          RUN apt-get update && \
+              apt-get install -y ca-certificates && \
+              rm -rf /var/lib/apt/lists/*
+          COPY etcd /usr/local/bin/etcd
+          COPY etcdctl /usr/local/bin/etcdctl
+          COPY etcdutl /usr/local/bin/etcdutl
+          RUN chmod +x /usr/local/bin/etcd* && \
+              mkdir -p /var/etcd /var/lib/etcd
+          EXPOSE 2379 2380
+          VOLUME /var/etcd /var/lib/etcd
+          ENTRYPOINT ["/usr/local/bin/etcd"]
           EOF
 
+          cp bin/etcd bin/etcdctl bin/etcdutl /tmp/etcd-build/
+
+          cd /tmp/etcd-build
           docker build \
-            --tag "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}-amd64" \
-            --tag "${{ env.DOCKERHUB_REPO }}/pause:latest-amd64" \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64" \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-amd64" \
             .
 
-          docker push "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}-amd64"
-          docker push "${{ env.DOCKERHUB_REPO }}/pause:latest-amd64"
+          docker push "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64"
+          docker push "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-amd64"
 
-  build-pause-riscv:
+  build-etcd-riscv:
     needs: get-versions
     runs-on: RISCV64
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Log in to DockerHub
+      - name: Log in to GHCR
         run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Setup Go
+        run: |
+          sudo apt update && sudo apt install -y golang
 
       - name: Clean workspace with elevated permissions
         run: |
           sudo rm -rf "$GITHUB_WORKSPACE"
           mkdir -p "$GITHUB_WORKSPACE"
 
-      - name: Build and push pause for RISC-V
+      - name: Clone etcd repository
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/pause-build" && cd "$GITHUB_WORKSPACE/pause-build"
+          git clone --depth=1 \
+            --branch "${{ needs.get-versions.outputs.etcd_version }}" \
+            https://github.com/etcd-io/etcd.git \
+            "$GITHUB_WORKSPACE/etcd"
 
-          cat > pause.c << 'PAUSE_C'
-          #include <signal.h>
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <sys/types.h>
-          #include <sys/wait.h>
-          #include <unistd.h>
-          static void sigdown(int signo) {
-            psignal(signo, "Shutting down, got signal");
-            exit(0);
-          }
-          static void sigreap(int signo) {
-            while (waitpid(-1, NULL, WNOHANG) > 0);
-          }
-          int main() {
-            if (getpid() != 1) {
-              fprintf(stderr, "Warning: pause should run as PID 1\n");
-            }
-            signal(SIGINT, sigdown);
-            signal(SIGTERM, sigdown);
-            signal(SIGCHLD, sigreap);
-            for (;;) pause();
-            return 0;
-          }
-          PAUSE_C
+      - name: Build and push etcd for RISC-V
+        run: |
+          cd "$GITHUB_WORKSPACE/etcd"
+          GOARCH=riscv64 ./scripts/build.sh
 
-          cat > Dockerfile << 'EOF'
-          FROM riscv64/golang:1.22-alpine AS builder
-          WORKDIR /build
-          COPY pause.c .
-          RUN apk add --no-cache gcc musl-dev && \
-              gcc -static -o /pause pause.c && \
-              strip /pause
-          FROM scratch
-          COPY --from=builder /pause /pause
-          ENTRYPOINT ["/pause"]
+          mkdir -p /tmp/etcd-build
+
+          cat > /tmp/etcd-build/Dockerfile << 'EOF'
+          FROM riscv64/debian:trixie-slim
+          RUN apt-get update && \
+              apt-get install -y ca-certificates && \
+              rm -rf /var/lib/apt/lists/*
+          COPY etcd /usr/local/bin/etcd
+          COPY etcdctl /usr/local/bin/etcdctl
+          COPY etcdutl /usr/local/bin/etcdutl
+          RUN chmod +x /usr/local/bin/etcd* && \
+              mkdir -p /var/etcd /var/lib/etcd
+          ENV ETCD_UNSUPPORTED_ARCH=riscv64
+          EXPOSE 2379 2380
+          VOLUME /var/etcd /var/lib/etcd
+          ENTRYPOINT ["/usr/local/bin/etcd"]
           EOF
 
+          cp bin/etcd bin/etcdctl bin/etcdutl /tmp/etcd-build/
+
+          cd /tmp/etcd-build
           docker build \
-            --tag "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}-riscv64" \
-            --tag "${{ env.DOCKERHUB_REPO }}/pause:latest-riscv64" \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64" \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-riscv64" \
             .
 
-          docker push "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}-riscv64"
-          docker push "${{ env.DOCKERHUB_REPO }}/pause:latest-riscv64"
-
-  build-flannel-x86:
-    needs: get-versions
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Clone Flannel repository
-        run: |
-          rm -rf flannel
-          git clone --depth=1 \
-            --branch "${{ needs.get-versions.outputs.flannel_version }}" \
-            https://github.com/flannel-io/flannel.git
-
-      - name: Build and push Flannel for x86_64
-        run: |
-          cd flannel
-          TAG="${{ needs.get-versions.outputs.flannel_tag }}"
-          ARCH="amd64"
-
-          make ARCH=${ARCH} TAG=${TAG} dist/flanneld-${TAG}-${ARCH}.docker
-
-          LOAD_OUTPUT=$(docker load -i "dist/flanneld-${TAG}-${ARCH}.docker")
-          echo "$LOAD_OUTPUT"
-          LOADED_IMAGE=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image: //p')
-
-          docker tag "${LOADED_IMAGE}" "${{ env.DOCKERHUB_REPO }}/flannel:${TAG}-${ARCH}"
-          docker tag "${LOADED_IMAGE}" "${{ env.DOCKERHUB_REPO }}/flannel:latest-${ARCH}"
-
-          docker push "${{ env.DOCKERHUB_REPO }}/flannel:${TAG}-${ARCH}"
-          docker push "${{ env.DOCKERHUB_REPO }}/flannel:latest-${ARCH}"
-
-  build-flannel-riscv:
-    needs: get-versions
-    runs-on: RISCV64
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Log in to DockerHub
-        run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
-
-      - name: Clone Flannel repository
-        run: |
-          git clone --depth=1 \
-            --branch "${{ needs.get-versions.outputs.flannel_version }}" \
-            https://github.com/flannel-io/flannel.git \
-            "$GITHUB_WORKSPACE/flannel"
-
-      - name: Build and push Flannel for RISC-V
-        run: |
-          cd "$GITHUB_WORKSPACE/flannel"
-          TAG="${{ needs.get-versions.outputs.flannel_tag }}"
-          ARCH="riscv64"
-
-          make ARCH=${ARCH} TAG=${TAG} dist/flanneld-${TAG}-${ARCH}.docker
-
-          LOAD_OUTPUT=$(docker load -i "dist/flanneld-${TAG}-${ARCH}.docker")
-          echo "$LOAD_OUTPUT"
-          LOADED_IMAGE=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image: //p')
-
-          docker tag "${LOADED_IMAGE}" "${{ env.DOCKERHUB_REPO }}/flannel:${TAG}-${ARCH}"
-          docker tag "${LOADED_IMAGE}" "${{ env.DOCKERHUB_REPO }}/flannel:latest-${ARCH}"
-
-          docker push "${{ env.DOCKERHUB_REPO }}/flannel:${TAG}-${ARCH}"
-          docker push "${{ env.DOCKERHUB_REPO }}/flannel:latest-${ARCH}"
-
-  build-flannel-cni-x86:
-    needs: get-versions
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Clone and build Flannel CNI Plugin for x86_64
-        run: |
-          git clone --depth=1 https://github.com/flannel-io/cni-plugin.git
-          cd cni-plugin
-
-          cat > Dockerfile << 'EOF'
-          FROM golang:1.24-alpine AS builder
-          WORKDIR /build
-          COPY . .
-          RUN apk add --no-cache git make && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o flannel-amd64 .
-          FROM alpine:latest
-          RUN mkdir -p /opt/cni/bin
-          COPY --from=builder /build/flannel-amd64 /opt/cni/bin/flannel
-          COPY --from=builder /build/flannel-amd64 /flannel
-          RUN chmod +x /opt/cni/bin/flannel /flannel
-          EOF
-
-          docker build -t "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest-amd64" .
-          docker push "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest-amd64"
-
-  build-flannel-cni-riscv:
-    needs: get-versions
-    runs-on: RISCV64
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Log in to DockerHub
-        run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
-
-      - name: Clone and build Flannel CNI Plugin for RISC-V
-        run: |
-          git clone --depth=1 https://github.com/flannel-io/cni-plugin.git "$GITHUB_WORKSPACE/cni-plugin"
-          cd "$GITHUB_WORKSPACE/cni-plugin"
-
-          cat > Dockerfile << 'EOF'
-          FROM riscv64/golang:1.24-alpine AS builder
-          WORKDIR /build
-          COPY . .
-          RUN apk add --no-cache git make && CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -o flannel-riscv64 .
-          FROM riscv64/alpine:latest
-          RUN mkdir -p /opt/cni/bin
-          COPY --from=builder /build/flannel-riscv64 /opt/cni/bin/flannel
-          COPY --from=builder /build/flannel-riscv64 /flannel
-          RUN chmod +x /opt/cni/bin/flannel /flannel
-          EOF
-
-          docker build --network=host -t "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest-riscv64" .
-          docker push "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest-riscv64"
+          docker push "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
+          docker push "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-riscv64"
 
   create-manifests:
-    needs: [get-versions, build-pause-x86, build-pause-riscv, build-flannel-x86, build-flannel-riscv, build-flannel-cni-x86, build-flannel-cni-riscv]
+    needs: [get-versions, build-etcd-x86, build-etcd-riscv]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Log in to DockerHub
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create pause multi-arch manifest
+      - name: Create etcd multi-arch manifest
         run: |
-          docker manifest rm "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}" 2>/dev/null || true
-          docker manifest rm "${{ env.DOCKERHUB_REPO }}/pause:latest" 2>/dev/null || true
+          docker manifest rm \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}" \
+            2>/dev/null || true
+          docker manifest rm \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest" \
+            2>/dev/null || true
 
-          docker manifest create "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}" \
-            "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}-amd64" \
-            "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}-riscv64"
-          docker manifest push "${{ env.DOCKERHUB_REPO }}/pause:${{ needs.get-versions.outputs.pause_version }}"
+          docker manifest create \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}" \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64" \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
 
-          docker manifest create "${{ env.DOCKERHUB_REPO }}/pause:latest" \
-            "${{ env.DOCKERHUB_REPO }}/pause:latest-amd64" \
-            "${{ env.DOCKERHUB_REPO }}/pause:latest-riscv64"
-          docker manifest push "${{ env.DOCKERHUB_REPO }}/pause:latest"
+          docker manifest push \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}"
 
-      - name: Create Flannel multi-arch manifest
-        run: |
-          docker manifest rm "${{ env.DOCKERHUB_REPO }}/flannel:${{ needs.get-versions.outputs.flannel_tag }}" 2>/dev/null || true
-          docker manifest rm "${{ env.DOCKERHUB_REPO }}/flannel:latest" 2>/dev/null || true
+          docker manifest create \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest" \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-amd64" \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-riscv64"
 
-          docker manifest create "${{ env.DOCKERHUB_REPO }}/flannel:${{ needs.get-versions.outputs.flannel_tag }}" \
-            "${{ env.DOCKERHUB_REPO }}/flannel:${{ needs.get-versions.outputs.flannel_tag }}-amd64" \
-            "${{ env.DOCKERHUB_REPO }}/flannel:${{ needs.get-versions.outputs.flannel_tag }}-riscv64"
-          docker manifest push "${{ env.DOCKERHUB_REPO }}/flannel:${{ needs.get-versions.outputs.flannel_tag }}"
-
-          docker manifest create "${{ env.DOCKERHUB_REPO }}/flannel:latest" \
-            "${{ env.DOCKERHUB_REPO }}/flannel:latest-amd64" \
-            "${{ env.DOCKERHUB_REPO }}/flannel:latest-riscv64"
-          docker manifest push "${{ env.DOCKERHUB_REPO }}/flannel:latest"
-
-      - name: Create Flannel CNI Plugin multi-arch manifest
-        run: |
-          docker manifest rm "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest" 2>/dev/null || true
-
-          docker manifest create "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest" \
-            "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest-amd64" \
-            "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest-riscv64"
-          docker manifest push "${{ env.DOCKERHUB_REPO }}/flannel-cni-plugin:latest"
-
-  generate-install-files:
-    needs: [get-versions, create-manifests]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Create installation files
-        run: |
-          mkdir -p flannel-riscv-install
-
-          cat > flannel-riscv-install/flannel-values.yaml << EOF
-          podCidr: "10.244.0.0/16"
-          image:
-            repository: ${{ env.DOCKERHUB_REPO }}/flannel
-            tag: ${{ needs.get-versions.outputs.flannel_tag }}
-          EOF
-
-          cat > flannel-riscv-install/install-flannel.sh << 'EOFSCRIPT'
-          #!/bin/bash
-          set -e
-
-          DOCKERHUB_USER="${{ env.DOCKERHUB_REPO }}"
-          FLANNEL_VERSION="${{ needs.get-versions.outputs.flannel_tag }}"
-          PAUSE_VERSION="${{ needs.get-versions.outputs.pause_version }}"
-
-          echo "=========================================="
-          echo "Installing Flannel for RISC-V/x86 Cluster"
-          echo "=========================================="
-
-          echo "Step 1: Configuring containerd pause image..."
-          sudo sed -i "s|sandbox_image = .*|sandbox_image = \"${DOCKERHUB_USER}/pause:${PAUSE_VERSION}\"|g" /etc/containerd/config.toml
-          sudo systemctl restart containerd
-          echo "Containerd configured."
-
-          echo "Step 2: Installing Flannel using Helm..."
-          helm repo add flannel https://flannel-io.github.io/flannel/
-          helm repo update
-          kubectl create namespace kube-flannel || true
-          kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
-
-          helm install flannel \
-            --namespace kube-flannel \
-            --set podCidr="10.244.0.0/16" \
-            --set image.repository="${DOCKERHUB_USER}/flannel" \
-            --set image.tag="${FLANNEL_VERSION}" \
-            flannel/flannel
-
-          echo "=========================================="
-          echo "Flannel Installation Complete!"
-          echo "=========================================="
-          echo "Verify: kubectl get pods -n kube-flannel"
-          EOFSCRIPT
-
-          chmod +x flannel-riscv-install/install-flannel.sh
-
-          cat > flannel-riscv-install/README.md << 'EOFREADME'
-          # Flannel for RISC-V and x86 Mixed Kubernetes Cluster
-
-          ## Images Built
-          - pause (amd64 + riscv64)
-          - flannel (amd64 + riscv64)
-          - flannel-cni-plugin (amd64 + riscv64)
-
-          ## Quick Installation
-
-              ./install-flannel.sh
-
-          ## Manual Installation
-
-          ### Step 1: Configure Pause Container (ALL nodes)
-          Edit /etc/containerd/config.toml and set:
-
-              [plugins."io.containerd.grpc.v1.cri"]
-                sandbox_image = "DOCKERHUB_USER/pause:PAUSE_VERSION"
-
-          Then restart containerd:
-
-              sudo systemctl restart containerd
-
-          ### Step 2: Install Flannel
-
-              helm repo add flannel https://flannel-io.github.io/flannel/
-              helm repo update
-              kubectl create namespace kube-flannel
-              kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
-              helm install flannel --namespace kube-flannel \
-                --set podCidr="10.244.0.0/16" \
-                flannel/flannel
-
-          ### Step 3: Verify
-
-              kubectl get pods -n kube-flannel
-              kubectl get nodes
-          EOFREADME
-
-      - name: Upload installation files
-        uses: actions/upload-artifact@v4
-        with:
-          name: flannel-riscv-install-${{ needs.get-versions.outputs.flannel_tag }}
-          path: flannel-riscv-install/
+          docker manifest push \
+            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest"
