@@ -12,12 +12,7 @@ jobs:
   build:
     runs-on: RISCV64
     env:
-      PACKAGESDIR: ${{ github.workspace }}/packages
-      DOWNLOADDIR: ${{ github.workspace }}/downloads
       OUTPUTDIR: ${{ github.workspace }}/output
-      RUNTIME_VERSION: 9.0.0-rtm.24528.9
-      SDK_VERSION: 9.0.100
-      ASPNETCORE_VERSION: 9.0.0-rtm.24529.3
     outputs:
       asset_name: ${{ steps.set-outputs.outputs.asset_name }}
       asset_path: ${{ steps.set-outputs.outputs.asset_path }}
@@ -33,105 +28,35 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git curl wget cmake ninja-build python3 \
+            git curl wget cmake ninja-build \
             clang llvm lld \
             libicu-dev libssl-dev libkrb5-dev \
             liblttng-ust-dev libcurl4-openssl-dev \
             zlib1g-dev libunwind-dev \
-            build-essential gettext locales
+            build-essential gettext locales \
+            python3 python3-pip
 
           # NodeSource does not support riscv64 — use Ubuntu repos instead
-          # Ubuntu Noble ships nodejs 18.x natively for riscv64
           sudo apt-get install -y nodejs npm
 
-      - name: Clone repositories
+      - name: Clone dotnet/dotnet VMR
+        # For .NET 9+, Microsoft merged all repos (runtime, aspnetcore, sdk, installer)
+        # into the Virtual Monolithic Repository (VMR) at github.com/dotnet/dotnet.
+        # The old multi-repo approach (separate runtime/aspnetcore/sdk/installer clones)
+        # was the .NET 8 way and no longer works for .NET 9.
         run: |
-          rm -rf runtime aspnetcore sdk installer
-          git clone --depth 1 -b v9.0.0 https://github.com/dotnet/runtime
-          git clone --depth 1 -b release/9.0 https://github.com/dotnet/aspnetcore --recurse-submodules
-          git clone --depth 1 -b v9.0.100 https://github.com/dotnet/sdk
-          git clone --depth 1 -b v9.0.100 https://github.com/dotnet/installer
+          git clone --depth 1 -b v9.0.100 https://github.com/dotnet/dotnet "$GITHUB_WORKSPACE/dotnet"
 
-      - name: Build runtime
+      - name: Build .NET SDK
         run: |
-          rm -rf "${PACKAGESDIR}" && mkdir -p "${PACKAGESDIR}"
-          rm -rf "${DOWNLOADDIR}" && mkdir -p "${DOWNLOADDIR}"
-          rm -rf "${OUTPUTDIR}" && mkdir -p "${OUTPUTDIR}"
+          mkdir -p "${OUTPUTDIR}"
+          cd "$GITHUB_WORKSPACE/dotnet"
 
-          cd runtime
+          # Native build on riscv64 — no cross-compilation flags needed
+          ./build.sh --clean-while-building
 
-          sed -i "s|<PublishTrimmed>true</PublishTrimmed>|<PublishTrimmed Condition=\"'$(TargetArchitecture)' != 'riscv64'\">true</PublishTrimmed>|" \
-            src/coreclr/tools/aot/crossgen2/crossgen2_publish.csproj
-
-          ./build.sh --ci -c Release
-
-          cp artifacts/packages/Release/Shipping/Microsoft.NETCore.App.Host.linux-riscv64.*.nupkg "${PACKAGESDIR}"
-          cp artifacts/packages/Release/Shipping/Microsoft.NETCore.App.Runtime.linux-riscv64.*.nupkg "${PACKAGESDIR}"
-          mkdir -p "${DOWNLOADDIR}/Runtime/${RUNTIME_VERSION}"
-          cp artifacts/packages/Release/Shipping/dotnet-runtime-*-linux-riscv64.tar.gz \
-            "${DOWNLOADDIR}/Runtime/${RUNTIME_VERSION}"
-          cp artifacts/packages/Release/Shipping/dotnet-runtime-*-linux-riscv64.tar.gz "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/Microsoft.NETCore.App.Host.linux-riscv64.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/Microsoft.NETCore.App.Runtime.linux-riscv64.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/runtime.linux-riscv64.Microsoft.NETCore.DotNetHost.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/runtime.linux-riscv64.Microsoft.NETCore.DotNetHostPolicy.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/runtime.linux-riscv64.Microsoft.NETCore.DotNetHostResolver.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/NonShipping/runtime.linux-riscv64.Microsoft.NETCore.ILAsm.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/NonShipping/runtime.linux-riscv64.Microsoft.NETCore.ILDAsm.*.nupkg "${OUTPUTDIR}"
-
-          cd .. && rm -rf runtime
-
-      - name: Build SDK
-        run: |
-          cd sdk
-          ./build.sh --pack --ci -c Release /p:Architecture=riscv64
-          mkdir -p "${DOWNLOADDIR}/Sdk/${SDK_VERSION}"
-          cp artifacts/packages/Release/NonShipping/dotnet-toolset-internal-*.zip \
-            "${DOWNLOADDIR}/Sdk/${SDK_VERSION}/dotnet-toolset-internal-${SDK_VERSION}.zip"
-          cp artifacts/packages/Release/Shipping/Microsoft.DotNet.Common.*.nupkg "${PACKAGESDIR}"
-          cd .. && rm -rf sdk
-
-      - name: Build aspnetcore
-        run: |
-          cd aspnetcore
-          sed -i "s|ppc64le|riscv64|" \
-            src/Framework/App.Runtime/src/Microsoft.AspNetCore.App.Runtime.csproj
-          sed -i "s|\$(BaseIntermediateOutputPath)\$(DotNetRuntimeArchiveFileName)|${DOWNLOADDIR}/Runtime/${RUNTIME_VERSION}/dotnet-runtime-9.0.0-linux-riscv64.tar.gz|" \
-            src/Framework/App.Runtime/src/Microsoft.AspNetCore.App.Runtime.csproj
-
-          ./eng/build.sh --pack --ci -c Release /p:DotNetAssetRootUrl=file://${DOWNLOADDIR}/
-
-          cp artifacts/packages/Release/Shipping/Microsoft.AspNetCore.App.Runtime.linux-riscv64.*.nupkg "${PACKAGESDIR}"
-          mkdir -p "${DOWNLOADDIR}/aspnetcore/Runtime/${ASPNETCORE_VERSION}"
-          cp artifacts/installers/Release/aspnetcore-runtime-*-linux-riscv64.tar.gz \
-            "${DOWNLOADDIR}/aspnetcore/Runtime/${ASPNETCORE_VERSION}/aspnetcore-runtime-9.0.0-linux-riscv64.tar.gz"
-          cp artifacts/installers/Release/aspnetcore_base_runtime.version \
-            "${DOWNLOADDIR}/aspnetcore/Runtime/${ASPNETCORE_VERSION}"
-          cp artifacts/packages/Release/Shipping/Microsoft.AspNetCore.App.Runtime.linux-riscv64.*.nupkg "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/Microsoft.DotNet.Web.*.nupkg "${PACKAGESDIR}"
-          cd .. && rm -rf aspnetcore
-
-      - name: Build installer
-        run: |
-          cd installer
-          sed -i "s|linux-arm64|linux-riscv64|" \
-            src/redist/targets/GenerateBundledVersions.targets
-          sed -i "s|linux-arm64|linux-riscv64|" \
-            src/SourceBuild/content/eng/bootstrap/buildBootstrapPreviouslySB.csproj
-          sed -i 's|ppc64le|riscv64|' Directory.Build.props
-          sed -i 's|ppc64le|riscv64|' src/SourceBuild/content/Directory.Build.props
-          sed -i 's|ppc64le|riscv64|' src/redist/targets/Crossgen.targets
-          sed -i "s|<clear />|<clear />\n<add key='local' value='${PACKAGESDIR}' />|" NuGet.config
-
-          # HostRid=linux-riscv64 because we build natively on riscv64
-          # (reference CI uses linux-x64 because they cross-compile from x86)
-          ./build.sh --ci -c Release -a riscv64 \
-            /p:HostRid=linux-riscv64 \
-            /p:PublicBaseURL=file://${DOWNLOADDIR}/
-
-          cp artifacts/packages/Release/Shipping/dotnet-sdk-*-linux-riscv64.tar.gz "${OUTPUTDIR}"
-          cp artifacts/packages/Release/Shipping/dotnet-sdk-*-linux-riscv64.tar.gz.sha512 "${OUTPUTDIR}"
-          cd .. && rm -rf installer
+          # Copy final SDK tarball to output
+          cp artifacts/assets/Release/dotnet-sdk-*-linux-riscv64.tar.gz "${OUTPUTDIR}/"
 
       - name: Set outputs
         id: set-outputs
@@ -140,6 +65,7 @@ jobs:
           ASSET_NAME=$(basename "$ASSET_FILE")
           ASSET_PATH="${OUTPUTDIR}/${ASSET_NAME}"
           VERSION=$(echo "$ASSET_NAME" | grep -oP 'dotnet-sdk-\K[0-9]+\.[0-9]+\.[0-9]+')
+
           echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
           echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
           echo "release_name=.NET SDK ${VERSION} RISC-V" >> "$GITHUB_OUTPUT"
@@ -149,3 +75,10 @@ jobs:
         with:
           name: ${{ steps.set-outputs.outputs.asset_name }}
           path: ${{ steps.set-outputs.outputs.asset_path }}
+
+      - name: Trigger Pages update
+        if: success()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: update-pages
