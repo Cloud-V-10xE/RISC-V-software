@@ -8,21 +8,18 @@ on:
         required: false
         default: 'latest'
   schedule:
-    - cron: "0 0 1 * *"
-    paths:
-      - '.github/workflows/build-coredns.yml'
+    - cron: "0 0 13 * *"
 
 env:
-  REGISTRY: docker.io
-  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}
+  REGISTRY: ghcr.io
 
 jobs:
-  # Get versions to build
   get-versions:
     runs-on: ubuntu-latest
     outputs:
       coredns_version: ${{ steps.versions.outputs.coredns_version }}
       coredns_tag: ${{ steps.versions.outputs.coredns_tag }}
+      image_repo: ${{ steps.versions.outputs.image_repo }}
     steps:
       - name: Get latest versions
         id: versions
@@ -32,15 +29,18 @@ jobs:
           else
             COREDNS_VERSION="${{ github.event.inputs.coredns_version }}"
           fi
-          
+
           COREDNS_TAG="${COREDNS_VERSION#v}"
-          
+
+          # Lowercase the repo owner — GHCR requires all image names to be lowercase
+          IMAGE_REPO="ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+
           echo "coredns_version=$COREDNS_VERSION" >> "$GITHUB_OUTPUT"
           echo "coredns_tag=$COREDNS_TAG" >> "$GITHUB_OUTPUT"
-          
+          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
+
           echo "Building CoreDNS: $COREDNS_VERSION"
 
-  # Build CoreDNS for x86
   build-coredns-x86:
     needs: get-versions
     runs-on: ubuntu-latest
@@ -51,56 +51,48 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to DockerHub
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clone CoreDNS repository
         run: |
-          git clone --depth=1 --branch ${{ needs.get-versions.outputs.coredns_version }} https://github.com/coredns/coredns.git
+          rm -rf coredns
+          git clone --depth=1 \
+            --branch "${{ needs.get-versions.outputs.coredns_version }}" \
+            https://github.com/coredns/coredns.git
 
-      - name: Build CoreDNS for x86_64
+      - name: Build and push CoreDNS for x86_64
         run: |
           cd coredns
-          
-          # Build CoreDNS
           make
-          
-          # Create Dockerfile
+
           mkdir -p /tmp/coredns-build
-          
+          cp coredns /tmp/coredns-build/
+
           cat > /tmp/coredns-build/Dockerfile << 'EOF'
           FROM debian:trixie-slim
-          
           RUN apt-get update && \
               apt-get install -y ca-certificates && \
               rm -rf /var/lib/apt/lists/*
-          
           COPY coredns /coredns
-          
           RUN chmod +x /coredns
-          
           EXPOSE 53 53/udp
-          
           ENTRYPOINT ["/coredns"]
           EOF
-          
-          # Copy binary
-          cp coredns /tmp/coredns-build/
-          
-          # Build and push
+
           cd /tmp/coredns-build
           docker build \
-            --tag ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64 \
-            --tag ${{ env.DOCKERHUB_REPO }}/coredns:latest-amd64 \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64" \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-amd64" \
             .
-          
-          docker push ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64
-          docker push ${{ env.DOCKERHUB_REPO }}/coredns:latest-amd64
 
-  # Build CoreDNS for RISC-V
+          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64"
+          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-amd64"
+
   build-coredns-riscv:
     needs: get-versions
     runs-on: RISCV64
@@ -108,60 +100,57 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Log in to DockerHub
+      - name: Log in to GHCR
         run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
 
       - name: Setup Go
         run: |
-          sudo apt update && sudo apt install -y golang
+          sudo apt-get update && sudo apt-get install -y golang
+
+      - name: Clean workspace with elevated permissions
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
 
       - name: Clone CoreDNS repository
         run: |
-          rm -rf coredns
-          git clone --depth=1 --branch ${{ needs.get-versions.outputs.coredns_version }} https://github.com/coredns/coredns.git
+          git clone --depth=1 \
+            --branch "${{ needs.get-versions.outputs.coredns_version }}" \
+            https://github.com/coredns/coredns.git \
+            "$GITHUB_WORKSPACE/coredns"
 
-      - name: Build CoreDNS for RISC-V
+      - name: Build and push CoreDNS for RISC-V
         run: |
+          cd "$GITHUB_WORKSPACE/coredns"
 
-          cd coredns
+          # Native build on riscv64 — no GOARCH flag needed
+          make
 
-          # Build CoreDNS for RISC-V
-          GOARCH=riscv64 make
-
-          # Create Dockerfile
           mkdir -p /tmp/coredns-build
+          cp coredns /tmp/coredns-build/
 
           cat > /tmp/coredns-build/Dockerfile << 'EOF'
           FROM riscv64/debian:trixie-slim
-
           RUN apt-get update && \
-          apt-get install -y ca-certificates && \
-          rm -rf /var/lib/apt/lists/*
-
+              apt-get install -y ca-certificates && \
+              rm -rf /var/lib/apt/lists/*
           COPY coredns /coredns
-
           RUN chmod +x /coredns
-
           EXPOSE 53 53/udp
-
           ENTRYPOINT ["/coredns"]
           EOF
 
-          # Copy binary
-          cp coredns /tmp/coredns-build/
-
-          # Build and push
           cd /tmp/coredns-build
           docker build \
-            --tag ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64 \
-            --tag ${{ env.DOCKERHUB_REPO }}/coredns:latest-riscv64 \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64" \
+            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-riscv64" \
             .
 
-          docker push ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64
-          docker push ${{ env.DOCKERHUB_REPO }}/coredns:latest-riscv64
+          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64"
+          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-riscv64"
 
-  # Create multi-arch manifest
   create-manifests:
     needs: [get-versions, build-coredns-x86, build-coredns-riscv]
     runs-on: ubuntu-latest
@@ -169,71 +158,27 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Log in to DockerHub
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create CoreDNS multi-arch manifest
         run: |
-          # Remove existing manifests if they exist
-          docker manifest rm ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }} 2>/dev/null || true
-          docker manifest rm ${{ env.DOCKERHUB_REPO }}/coredns:latest 2>/dev/null || true
-          
-          # Create versioned manifest
-          docker manifest create ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }} \
-            ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64 \
-            ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64
-          
-          docker manifest push ${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}
-          
-          # Create latest manifest
-          docker manifest create ${{ env.DOCKERHUB_REPO }}/coredns:latest \
-            ${{ env.DOCKERHUB_REPO }}/coredns:latest-amd64 \
-            ${{ env.DOCKERHUB_REPO }}/coredns:latest-riscv64
-          
-          docker manifest push ${{ env.DOCKERHUB_REPO }}/coredns:latest
+          IMAGE_REPO="${{ needs.get-versions.outputs.image_repo }}"
+          COREDNS_TAG="${{ needs.get-versions.outputs.coredns_tag }}"
 
-  # Create GitHub Release
-  create-release:
-    needs: [get-versions, create-manifests]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+          docker manifest rm "${IMAGE_REPO}/coredns:${COREDNS_TAG}" 2>/dev/null || true
+          docker manifest rm "${IMAGE_REPO}/coredns:latest" 2>/dev/null || true
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: coredns-${{ needs.get-versions.outputs.coredns_version }}
-          name: CoreDNS ${{ needs.get-versions.outputs.coredns_version }} for RISC-V
-          body: |
-            # CoreDNS ${{ needs.get-versions.outputs.coredns_version }} - RISC-V Support
-            
-            Multi-architecture CoreDNS image for mixed x86/RISC-V Kubernetes clusters.
-            
-            ## 🐧 Images Available
-            
-            All images support both `linux/amd64` and `linux/riscv64`:
-            
-            - `${{ env.DOCKERHUB_REPO }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}`
-            
-            ## 🚀 Usage
-            
-            This image is automatically pulled when running the control-plane setup script.
-            
-            ## 🔗 Links
-            
-            - [CoreDNS Documentation](https://coredns.io/manual/toc/)
-          draft: false
-          prerelease: false
+          docker manifest create "${IMAGE_REPO}/coredns:${COREDNS_TAG}" \
+            "${IMAGE_REPO}/coredns:${COREDNS_TAG}-amd64" \
+            "${IMAGE_REPO}/coredns:${COREDNS_TAG}-riscv64"
+          docker manifest push "${IMAGE_REPO}/coredns:${COREDNS_TAG}"
 
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+          docker manifest create "${IMAGE_REPO}/coredns:latest" \
+            "${IMAGE_REPO}/coredns:latest-amd64" \
+            "${IMAGE_REPO}/coredns:latest-riscv64"
+          docker manifest push "${IMAGE_REPO}/coredns:latest"
