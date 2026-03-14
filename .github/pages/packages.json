@@ -125,6 +125,14 @@
       "label": "CMake",
       "category": "Build Tools",
       "description": "Cross-platform build system generator"
+    },
+    {
+      "id": "golang",
+      "label": "Go",
+      "category": "Runtimes",
+      "description": "Go programming language runtime and toolchain — official releases do not include riscv64 binaries",
+      "central_release": true,
+      "workflow": "build-go.yml"
     }
   ]
 }
