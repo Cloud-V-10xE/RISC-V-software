@@ -54,9 +54,21 @@ jobs:
         run: |
           git clone --depth=1 \
             --branch "${{ steps.get-version.outputs.tag }}" \
-            --recurse-submodules \
             https://github.com/grpc/grpc.git \
             "$GITHUB_WORKSPACE/grpc-src"
+          cd "$GITHUB_WORKSPACE/grpc-src"
+          # Explicitly initialize key submodules — shallow clone with
+          # --recurse-submodules doesn't always fetch nested submodules
+          # (e.g. third_party/protobuf/third_party/abseil-cpp) correctly.
+          git submodule update --init --depth=1 \
+            third_party/abseil-cpp \
+            third_party/protobuf \
+            third_party/re2 \
+            third_party/boringssl-with-bazel \
+            third_party/cares/cares
+          # Initialize protobuf's own nested abseil submodule
+          cd third_party/protobuf
+          git submodule update --init --depth=1 third_party/abseil-cpp
 
       - name: Build gRPC
         run: |
@@ -64,13 +76,15 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/grpc-install" \
+            -DCMAKE_CXX_STANDARD=17 \
             -DgRPC_INSTALL=ON \
             -DgRPC_BUILD_TESTS=OFF \
-            -DgRPC_ABSL_PROVIDER=package \
-            -DgRPC_CARES_PROVIDER=package \
-            -DgRPC_RE2_PROVIDER=package \
+            -DgRPC_ABSL_PROVIDER=module \
+            -DgRPC_PROTOBUF_PROVIDER=module \
+            -DgRPC_RE2_PROVIDER=module \
             -DgRPC_SSL_PROVIDER=package \
             -DgRPC_ZLIB_PROVIDER=package \
+            -DgRPC_CARES_PROVIDER=package \
             -G Ninja
           cmake --build build --parallel $(nproc)
           cmake --install build
