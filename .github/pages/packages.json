@@ -154,6 +154,62 @@
       "category": "Infrastructure",
       "description": "Kubernetes package manager — no official riscv64 binary from upstream",           
       "central_release": true, "workflow": "build-helm.yml"   
+    },
+    {
+      "id": "python",
+      "label": "Python",
+      "category": "Runtimes",
+      "description": "Python 3.13 — latest version with significant performance improvements, no prebuilt riscv64 binary",
+      "central_release": true,
+      "workflow": "build-python.yml"
+    },
+    {
+      "id": "ruby",
+      "label": "Ruby",
+      "category": "Runtimes",
+      "description": "Ruby programming language — latest versions not available via apt for riscv64",
+      "central_release": true,
+      "workflow": "build-ruby.yml"
+    },
+    {
+      "id": "zstd",
+      "label": "Zstd",
+      "category": "Build Tools",
+      "description": "Fast lossless compression algorithm used by Docker, kernel and package managers",
+      "central_release": true,
+      "workflow": "build-zstd.yml"
+    },
+    {
+      "id": "protobuf",
+      "label": "Protobuf",
+      "category": "Infrastructure",
+      "description": "Protocol Buffers compiler and runtime — required by gRPC, TensorFlow and Kubernetes",
+      "central_release": true,
+      "workflow": "build-protobuf.yml"
+    },
+    {
+      "id": "grpc",
+      "label": "gRPC",
+      "category": "Infrastructure",
+      "description": "High-performance RPC framework used by cloud-native tools — no riscv64 prebuilt",
+      "central_release": true,
+      "workflow": "build-grpc.yml"
+    },
+    {
+      "id": "containerd",
+      "label": "containerd",
+      "category": "Infrastructure",
+      "description": "Container runtime used by Kubernetes and Docker — no official riscv64 binary",
+      "central_release": true,
+      "workflow": "build-containerd.yml"
+    },
+    {
+      "id": "fzf",
+      "label": "fzf",
+      "category": "Build Tools",
+      "description": "Command-line fuzzy finder — massively popular developer tool with no riscv64 binary",
+      "central_release": true,
+      "workflow": "build-fzf.yml"
     }
   ]
 }
