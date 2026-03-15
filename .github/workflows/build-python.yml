@@ -51,7 +51,7 @@ jobs:
         run: |
           # CPython tags look like v3.13.2 — get latest stable 3.13.x
           LATEST=$(curl -s "https://api.github.com/repos/python/cpython/releases?per_page=100" \
-            | jq -r '[.[] | select(.prerelease == false) | select(.draft == false) | select(.tag_name | test("^v3\.13\."))] | .[0].tag_name')
+            | jq -r '[.[] | select(.prerelease == false) | select(.draft == false) | select(.tag_name | startswith("v3.13."))] | .[0].tag_name')
           VERSION="${LATEST#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
