@@ -3,7 +3,7 @@ name: Build Ninja for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 3 * *"
+    - cron: "0 0 1 * *"
 
 jobs:
   build:
@@ -22,7 +22,8 @@ jobs:
             build-essential \
             git \
             python3 \
-            cmake
+            cmake \
+            jq
 
       - name: Clean workspace with elevated permissions
         run: |
@@ -82,10 +83,3 @@ jobs:
         with:
           name: ${{ steps.set-outputs.outputs.asset_name }}
           path: ${{ steps.set-outputs.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
