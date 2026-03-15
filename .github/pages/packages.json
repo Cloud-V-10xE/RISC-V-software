@@ -57,7 +57,7 @@
       "workflow": "build-dotnet.yml"
     },
     {
-      "id": "pytorch",
+      "id": "torch",
       "label": "PyTorch",
       "category": "ML Frameworks",
       "description": "Machine learning framework by Meta",
