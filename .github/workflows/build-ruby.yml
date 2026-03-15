@@ -3,7 +3,7 @@ name: Build Ruby for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 7 * *"
+    - cron: "0 0 1 * *"
 
 jobs:
   build:
@@ -31,7 +31,8 @@ jobs:
             libncurses5-dev \
             libffi-dev \
             autoconf \
-            bison
+            bison \
+            ruby
 
       - name: Clean workspace with elevated permissions
         run: |
@@ -66,10 +67,13 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/ruby-src"
           autoreconf -fi
+          # --with-baseruby points to the apt Ruby used to generate
+          # code during the build. The resulting Ruby replaces it at runtime.
           ./configure \
             --prefix="$GITHUB_WORKSPACE/ruby-install" \
             --enable-shared \
-            --disable-install-doc
+            --disable-install-doc \
+            --with-baseruby=$(which ruby)
           make -j$(nproc)
           make install
 
@@ -97,10 +101,3 @@ jobs:
         with:
           name: ${{ steps.set-outputs.outputs.asset_name }}
           path: ${{ steps.set-outputs.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
