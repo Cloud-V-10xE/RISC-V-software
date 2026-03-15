@@ -3,7 +3,7 @@ name: Build SQLite for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 4 * *"
+    - cron: "0 0 1 * *"
 
 jobs:
   build:
@@ -69,8 +69,7 @@ jobs:
           ./configure \
             --prefix="$GITHUB_WORKSPACE/sqlite-install" \
             --enable-readline \
-            --enable-fts5 \
-            --enable-json1
+            --enable-fts5
           make -j$(nproc)
           make install
 
@@ -97,10 +96,3 @@ jobs:
         with:
           name: ${{ steps.set-outputs.outputs.asset_name }}
           path: ${{ steps.set-outputs.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
