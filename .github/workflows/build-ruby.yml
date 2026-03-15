@@ -67,19 +67,18 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE/ruby-src"
           autoreconf -fi
-          # --with-baseruby points to the apt Ruby used to generate
-          # code during the build. The resulting Ruby replaces it at runtime.
-          # --disable-rubygems skips bundled gem downloads (minitest etc.)
-          # which time out on the self-hosted runner — rubygems.org unreachable.
-          # Users can install gems after deployment with: gem install <name>
           ./configure \
             --prefix="$GITHUB_WORKSPACE/ruby-install" \
             --enable-shared \
             --disable-install-doc \
-            --disable-rubygems \
             --with-baseruby=$(which ruby)
-          make -j$(nproc)
-          make install
+
+          # BUNDLED_GEMS="" tells make to skip downloading bundled gems
+          # (minitest, rake, etc.) from rubygems.org entirely.
+          # The self-hosted runner cannot reach rubygems.org so we skip
+          # them — users can install gems after deployment with `gem install`.
+          make -j$(nproc) BUNDLED_GEMS=""
+          make install BUNDLED_GEMS=""
 
       - name: Verify
         run: |
