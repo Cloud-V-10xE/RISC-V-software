@@ -3,7 +3,7 @@ name: Build fzf for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 12 * *"
+    - cron: "0 0 1 * *"
 
 jobs:
   build:
@@ -57,7 +57,8 @@ jobs:
           # fzf uses a simple Makefile — produces a single binary
           make
           mkdir -p "$GITHUB_WORKSPACE/fzf-install/bin"
-          cp target/fzf "$GITHUB_WORKSPACE/fzf-install/bin/fzf"
+          # Makefile outputs to target/fzf-linux_riscv64 on riscv64
+          cp target/fzf-linux_riscv64 "$GITHUB_WORKSPACE/fzf-install/bin/fzf"
 
       - name: Verify
         run: |
@@ -82,10 +83,3 @@ jobs:
         with:
           name: ${{ steps.set-outputs.outputs.asset_name }}
           path: ${{ steps.set-outputs.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
