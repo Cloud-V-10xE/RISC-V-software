@@ -3,7 +3,7 @@ name: Build Protobuf for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 9 * *"
+    - cron: "0 0 1 * *"
 
 jobs:
   build:
@@ -24,8 +24,7 @@ jobs:
             jq \
             cmake \
             ninja-build \
-            zlib1g-dev \
-            libabsl-dev
+            zlib1g-dev
 
       - name: Clean workspace with elevated permissions
         run: |
@@ -61,8 +60,9 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/protobuf-install" \
-            -DABSL_PROPAGATE_CXX_STD=ON \
             -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_ABSL_PROVIDER=module \
+            -DCMAKE_CXX_STANDARD=17 \
             -G Ninja
           cmake --build build --parallel $(nproc)
           cmake --install build
@@ -90,10 +90,3 @@ jobs:
         with:
           name: ${{ steps.set-outputs.outputs.asset_name }}
           path: ${{ steps.set-outputs.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
