@@ -7,6 +7,10 @@ on:
   workflow_run:
     workflows: ["Central Release"]
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - .github/pages/packages.json
 
 jobs:
   build-and-deploy:
