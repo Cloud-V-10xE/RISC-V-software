@@ -49,14 +49,6 @@
       "workflow": "build-jdk.yml"
     },
     {
-      "id": "dotnet-sdk",
-      "label": ".NET SDK",
-      "category": "Runtimes",
-      "description": ".NET SDK — build, run and publish .NET apps",
-      "central_release": true,
-      "workflow": "build-dotnet.yml"
-    },
-    {
       "id": "torch",
       "label": "PyTorch",
       "category": "ML Frameworks",
