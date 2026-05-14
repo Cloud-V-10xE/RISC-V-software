@@ -1,3 +1,4 @@
+# Overlay for Transformers. Common scaffolding lives in _build-package.yaml.
 name: Build Transformers for RISC-V
 
 on:
@@ -7,178 +8,101 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.get-latest-tag.outputs.tag_name }}
-      release_name: ${{ steps.get-version.outputs.release_name }}
-      asset_name: ${{ steps.get-version.outputs.asset_name }}
-      asset_path: ${{ steps.get-version.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Transformers RISC-V
+      apt-packages: >-
+        python3 python3-dev python3-venv python3-pip build-essential git
+        wget curl libopenblas-dev
+      setup-script: |
+        set -eux
+        # Install Rust with retries
+        install_rust() {
+          local max_attempts=10
+          local attempt=1
+          local wait_time=5
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            python3 \
-            python3-dev \
-            python3-venv \
-            python3-pip \
-            build-essential \
-            git \
-            wget \
-            curl \
-            libopenblas-dev
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt of $max_attempts to install Rust..."
 
-      - name: Install Rust with retries
-        run: |
-          install_rust() {
-            local max_attempts=10
-            local attempt=1
-            local wait_time=5
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt of $max_attempts to install Rust..."
-              
-              if curl --retry 5 --retry-delay 5 --retry-max-time 60 \
-                   --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                   | sh -s -- -y --default-toolchain stable; then
-                echo "✅ Rust installation successful!"
-                source "$HOME/.cargo/env"
-                rustc --version
-                cargo --version
-                return 0
-              fi
-              
-              echo "❌ Attempt $attempt failed"
-              if [ $attempt -lt $max_attempts ]; then
-                echo "Retrying in $wait_time seconds..."
-                sleep $wait_time
-                wait_time=$((wait_time * 2))
-              fi
-              attempt=$((attempt + 1))
-            done
-            
-            echo "❌ Failed to install Rust after $max_attempts attempts"
-            return 1
-          }
-          
-          install_rust
+            if curl --retry 5 --retry-delay 5 --retry-max-time 60 \
+                 --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                 | sh -s -- -y --default-toolchain stable; then
+              echo "Rust installation successful!"
+              source "$HOME/.cargo/env"
+              rustc --version
+              cargo --version
+              return 0
+            fi
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+            echo "Attempt $attempt failed"
+            if [ $attempt -lt $max_attempts ]; then
+              echo "Retrying in $wait_time seconds..."
+              sleep $wait_time
+              wait_time=$((wait_time * 2))
+            fi
+            attempt=$((attempt + 1))
+          done
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+          echo "Failed to install Rust after $max_attempts attempts"
+          return 1
+        }
 
-      - name: Setup Python environment
-        run: |
-          python3 -m venv "$GITHUB_WORKSPACE/venv"
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          pip config set global.retries 10
-          pip config set global.timeout 60
-          pip install --upgrade pip setuptools wheel build
+        install_rust
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          python --version
-          pip --version
-          source "$HOME/.cargo/env"
-          cargo --version
-          rustc --version
+        # Setup Python venv
+        python3 -m venv "$GITHUB_WORKSPACE/venv"
+        source "$GITHUB_WORKSPACE/venv/bin/activate"
+        pip config set global.retries 10
+        pip config set global.timeout 60
+        pip install --upgrade pip setuptools wheel build
+      build-script: |
+        set -eux
+        source "$HOME/.cargo/env"
+        source "$GITHUB_WORKSPACE/venv/bin/activate"
 
-      - name: Clone transformers and checkout latest tag
-        id: get-latest-tag
-        run: |
-          set -eux
-          git config --global http.postBuffer 524288000
-          git config --global http.maxRequests 2
-          git config --global core.compression 0
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequests 2
+        git config --global core.compression 0
 
-          rm -rf "$GITHUB_WORKSPACE/transformers"
-          git clone --depth=1 --no-tags https://github.com/huggingface/transformers.git "$GITHUB_WORKSPACE/transformers"
-          cd "$GITHUB_WORKSPACE/transformers"
+        rm -rf "$GITHUB_WORKSPACE/transformers"
+        git clone --depth=1 --no-tags https://github.com/huggingface/transformers.git "$GITHUB_WORKSPACE/transformers"
+        cd "$GITHUB_WORKSPACE/transformers"
 
-          git fetch --tags --depth=1
-          LATEST_TAG=$(git tag -l "v*" | grep -v "rc" | sort -V | tail -n 1)
-          echo "Checking out $LATEST_TAG"
-          git fetch --depth=1 origin tag "$LATEST_TAG"
-          git checkout FETCH_HEAD
+        git fetch --tags --depth=1
+        LATEST_TAG=$(git tag -l "v*" | grep -v "rc" | sort -V | tail -n 1)
+        echo "Checking out $LATEST_TAG"
+        git fetch --depth=1 origin tag "$LATEST_TAG"
+        git checkout FETCH_HEAD
 
-          echo "tag_name=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+        # Install PyTorch RISC-V wheel
+        wget https://github.com/alitariq4589/pytorch-riscv/releases/download/v2.10.0/torch-2.10.0a0+git449b176-cp312-cp312-linux_riscv64.whl
+        pip install torch-2.10.0a0+git449b176-cp312-cp312-linux_riscv64.whl
 
-      - name: Install PyTorch RISC-V wheel
-        run: |
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          wget https://github.com/alitariq4589/pytorch-riscv/releases/download/v2.10.0/torch-2.10.0a0+git449b176-cp312-cp312-linux_riscv64.whl
-          pip install torch-2.10.0a0+git449b176-cp312-cp312-linux_riscv64.whl
+        pip install setuptools>=40.8.0 wheel
+        pip install maturin
+        pip install numpy packaging
+        echo "Building tokenizers from source..."
+        pip install "tokenizers>=0.22.0,<=0.23.0"
 
-      - name: Install and build dependencies
-        run: |
-          source "$HOME/.cargo/env"
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          cd "$GITHUB_WORKSPACE/transformers"
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
 
-          pip install setuptools>=40.8.0 wheel
-          pip install maturin
-          pip install numpy packaging
-          echo "Building tokenizers from source..."
-          pip install "tokenizers>=0.22.0,<=0.23.0"
+        python -m build --wheel --no-isolation
 
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+        WHEEL_FILE=$(ls dist/*.whl)
+        WHEEL_NAME=$(basename "$WHEEL_FILE")
+        VERSION=$(echo "$WHEEL_NAME" | sed -n 's/transformers-\([^-]*\)-.*/\1/p')
 
-      - name: Build transformers wheel
-        run: |
-          source "$HOME/.cargo/env"
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          cd "$GITHUB_WORKSPACE/transformers"
-          python -m build --wheel --no-isolation
+        ASSET_NAME="transformers-${VERSION}-py3-none-linux_riscv64.whl"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        cp "$WHEEL_FILE" "$ASSET_PATH"
 
-      - name: Get version and set outputs
-        id: get-version
-        run: |
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          cd "$GITHUB_WORKSPACE/transformers"
+        # Verify wheel
+        pip install "$ASSET_PATH"
+        python -c "import transformers; print(f'Transformers version: {transformers.__version__}')"
 
-          WHEEL_FILE=$(ls dist/*.whl)
-          WHEEL_NAME=$(basename "$WHEEL_FILE")
-          VERSION=$(echo "$WHEEL_NAME" | sed -n 's/transformers-\([^-]*\)-.*/\1/p')
-
-          ASSET_NAME="transformers-${VERSION}-py3-none-linux_riscv64.whl"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-
-          cp "$WHEEL_FILE" "$ASSET_PATH"
-
-          echo "release_name=Transformers ${VERSION} RISC-V" >> "$GITHUB_OUTPUT"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Verify wheel
-        run: |
-          source "$HOME/.cargo/env"
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          pip install "${{ steps.get-version.outputs.asset_path }}"
-          python -c "import transformers; print(f'Transformers version: {transformers.__version__}')"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.get-version.outputs.asset_name }}
-          path: ${{ steps.get-version.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

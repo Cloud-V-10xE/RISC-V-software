@@ -1,3 +1,4 @@
+# Overlay for Node.js. Common scaffolding lives in _build-package.yaml.
 name: Build Nodejs for RISC-V
 
 on:
@@ -7,132 +8,52 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.get-latest-tag.outputs.tag_name }}
-      release_name: ${{ steps.get-version.outputs.release_name }}
-      asset_name: ${{ steps.get-version.outputs.asset_name }}
-      asset_path: ${{ steps.get-version.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Node.js RISC-V
+      apt-packages: >-
+        libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential
+        libcurl4-openssl-dev wget ccache python3 file
+      setup-script: |
+        set -eux
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+        sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+        sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+        rustup install stable
+        rustup default stable
+        mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
+      build-script: |
+        set -eux
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequests 2
+        git config --global core.compression 0
 
-    steps:
-      - name: Install dependencies
-        run: |
-          set -eux
-          sudo apt-get update
-          sudo apt-get install -y \
-            libatomic1 \
-            libtsan2 \
-            gcc-14 \
-            g++-14 \
-            rustup \
-            cmake \
-            build-essential \
-            libcurl4-openssl-dev \
-            wget \
-            ccache \
-            python3 \
-            file
+        rm -rf "$GITHUB_WORKSPACE/node"
+        git clone --depth=1 --no-tags https://github.com/nodejs/node.git "$GITHUB_WORKSPACE/node"
+        cd "$GITHUB_WORKSPACE/node"
 
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+        git fetch --tags --depth=1
+        LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
+        echo "Checking out $LATEST_TAG"
+        git fetch --depth=1 origin tag "$LATEST_TAG"
+        git checkout FETCH_HEAD
 
-          rustup install stable
-          rustup default stable
+        ./configure \
+          --prefix="$GITHUB_WORKSPACE/installed_binaries" \
+          --openssl-no-asm \
+          --dest-cpu=riscv64
+        make -j$(nproc)
+        make install
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        "$GITHUB_WORKSPACE/installed_binaries/bin/node" -v
+        file "$GITHUB_WORKSPACE/installed_binaries/bin/node"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        NODE_VERSION=$("$GITHUB_WORKSPACE/installed_binaries/bin/node" -v | cut -c 2-)
+        ASSET_NAME="nodejs-${NODE_VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/installed_binaries" .
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          gcc --version
-          g++ --version
-          ldd --version
-          make --version
-
-      - name: Setup directories
-        run: mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
-
-      - name: Clone Node.js and checkout latest tag
-        id: get-latest-tag
-        run: |
-          set -eux
-          git config --global http.postBuffer 524288000
-          git config --global http.maxRequests 2
-          git config --global core.compression 0
-
-          rm -rf "$GITHUB_WORKSPACE/node"
-          git clone --depth=1 --no-tags https://github.com/nodejs/node.git "$GITHUB_WORKSPACE/node"
-          cd "$GITHUB_WORKSPACE/node"
-
-          git fetch --tags --depth=1
-          LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
-          echo "Checking out $LATEST_TAG"
-          git fetch --depth=1 origin tag "$LATEST_TAG"
-          git checkout FETCH_HEAD
-
-          echo "tag_name=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Configure
-        run: |
-          cd "$GITHUB_WORKSPACE/node"
-          ./configure \
-            --prefix="$GITHUB_WORKSPACE/installed_binaries" \
-            --openssl-no-asm \
-            --dest-cpu=riscv64
-
-      - name: Build
-        run: |
-          cd "$GITHUB_WORKSPACE/node"
-          make -j$(nproc)
-
-      - name: Install
-        run: |
-          cd "$GITHUB_WORKSPACE/node"
-          make install
-
-      - name: Verify installation
-        run: |
-          "$GITHUB_WORKSPACE/installed_binaries/bin/node" -v
-          file "$GITHUB_WORKSPACE/installed_binaries/bin/node"
-
-      - name: Get Node.js version and set outputs
-        id: get-version
-        run: |
-          NODE_VERSION=$("$GITHUB_WORKSPACE/installed_binaries/bin/node" -v | cut -c 2-)
-          ASSET_NAME="nodejs-${NODE_VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-
-          echo "release_name=Node.js ${NODE_VERSION} RISC-V" >> "$GITHUB_OUTPUT"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package binaries
-        run: |
-          tar -czf "${{ steps.get-version.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/installed_binaries" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.get-version.outputs.asset_name }}
-          path: ${{ steps.get-version.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

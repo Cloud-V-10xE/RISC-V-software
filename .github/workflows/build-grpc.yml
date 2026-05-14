@@ -1,3 +1,4 @@
+# Overlay for gRPC. Common scaffolding lives in _build-package.yaml.
 name: Build gRPC for RISC-V
 
 on:
@@ -7,112 +8,63 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: gRPC RISC-V
+      apt-packages: >-
+        build-essential git jq cmake ninja-build libssl-dev zlib1g-dev
+        libabsl-dev libre2-dev libc-ares-dev
+      build-script: |
+        set -eux
+        LATEST=$(curl -s https://api.github.com/repos/grpc/grpc/releases/latest \
+          | jq -r '.tag_name')
+        VERSION="${LATEST#v}"
+        echo "Latest gRPC: $LATEST"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            jq \
-            cmake \
-            ninja-build \
-            libssl-dev \
-            zlib1g-dev \
-            libabsl-dev \
-            libre2-dev \
-            libc-ares-dev
+        git clone --depth=1 \
+          --branch "$LATEST" \
+          https://github.com/grpc/grpc.git \
+          "$GITHUB_WORKSPACE/grpc-src"
+        cd "$GITHUB_WORKSPACE/grpc-src"
+        # Initialize top-level submodules only — nested submodule init
+        # (e.g. protobuf's own abseil) must be done separately with cd
+        git submodule update --init --depth=1 \
+          third_party/abseil-cpp \
+          third_party/protobuf \
+          third_party/re2 \
+          third_party/boringssl-with-bazel \
+          third_party/cares/cares
+        # Now init protobuf's nested abseil from within its directory
+        cd "$GITHUB_WORKSPACE/grpc-src/third_party/protobuf"
+        git submodule update --init --depth=1 third_party/abseil-cpp \
+          2>/dev/null || true
+        # Also init utf8_range which protobuf needs
+        git submodule update --init --depth=1 third_party/utf8_range \
+          2>/dev/null || true
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE/grpc-src"
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/grpc-install" \
+          -DCMAKE_CXX_STANDARD=17 \
+          -DgRPC_INSTALL=ON \
+          -DgRPC_BUILD_TESTS=OFF \
+          -DgRPC_ABSL_PROVIDER=module \
+          -DgRPC_PROTOBUF_PROVIDER=module \
+          -DgRPC_RE2_PROVIDER=module \
+          -DgRPC_SSL_PROVIDER=package \
+          -DgRPC_ZLIB_PROVIDER=package \
+          -DgRPC_CARES_PROVIDER=package \
+          -G Ninja
+        cmake --build build --parallel $(nproc)
+        cmake --install build
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
-
-      - name: Get latest gRPC version
-        id: get-version
-        run: |
-          LATEST=$(curl -s https://api.github.com/repos/grpc/grpc/releases/latest \
-            | jq -r '.tag_name')
-          VERSION="${LATEST#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest gRPC: $LATEST"
-
-      - name: Clone gRPC
-        run: |
-          git clone --depth=1 \
-            --branch "${{ steps.get-version.outputs.tag }}" \
-            https://github.com/grpc/grpc.git \
-            "$GITHUB_WORKSPACE/grpc-src"
-          cd "$GITHUB_WORKSPACE/grpc-src"
-          # Initialize top-level submodules only — nested submodule init
-          # (e.g. protobuf's own abseil) must be done separately with cd
-          git submodule update --init --depth=1 \
-            third_party/abseil-cpp \
-            third_party/protobuf \
-            third_party/re2 \
-            third_party/boringssl-with-bazel \
-            third_party/cares/cares
-          # Now init protobuf's nested abseil from within its directory
-          cd "$GITHUB_WORKSPACE/grpc-src/third_party/protobuf"
-          git submodule update --init --depth=1 third_party/abseil-cpp \
-            2>/dev/null || true
-          # Also init utf8_range which protobuf needs
-          git submodule update --init --depth=1 third_party/utf8_range \
-            2>/dev/null || true
-
-      - name: Build gRPC
-        run: |
-          cd "$GITHUB_WORKSPACE/grpc-src"
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/grpc-install" \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DgRPC_INSTALL=ON \
-            -DgRPC_BUILD_TESTS=OFF \
-            -DgRPC_ABSL_PROVIDER=module \
-            -DgRPC_PROTOBUF_PROVIDER=module \
-            -DgRPC_RE2_PROVIDER=module \
-            -DgRPC_SSL_PROVIDER=package \
-            -DgRPC_ZLIB_PROVIDER=package \
-            -DgRPC_CARES_PROVIDER=package \
-            -G Ninja
-          cmake --build build --parallel $(nproc)
-          cmake --install build
-
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/grpc-install/bin/grpc_cpp_plugin" --version 2>&1 || \
+        "$GITHUB_WORKSPACE/grpc-install/bin/grpc_cpp_plugin" --version 2>&1 || \
           ls "$GITHUB_WORKSPACE/grpc-install/bin/"
 
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="grpc-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
+        ASSET_NAME="grpc-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/grpc-install" .
 
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/grpc-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"

@@ -23,7 +23,7 @@
 
 Getting software running on RISC-V is harder than it should be. Official releases skip riscv64. Package managers ship outdated versions. Developers who need the latest GCC, Go, Python, or Kubernetes tooling on RISC-V hardware end up spending hours building from source.
 
-This project solves that by building popular packages natively on real RISC-V hardware (Milk-V Pioneer, 64 cores) and publishing ready-to-use binaries — updated automatically every month.
+This project solves that by building popular packages natively on [RISE Runners](https://github.com/apps/rise-risc-v-runners) and publishing ready-to-use binaries which are updated automatically every month.
 
 ---
 
@@ -31,7 +31,7 @@ This project solves that by building popular packages natively on real RISC-V ha
 
 ### Download a binary
 
-Visit the [package archive](https://cloud-v-10xe.github.io/RISC-V-softwares/) and download the version you need, or use `wget` directly from a release:
+Visit the [package archive](https://cloud-v-10xe.github.io/RISC-V-software/) and download the version you need, or use `wget` directly from a release:
 
 ```bash
 # Example: install the latest GCC
@@ -59,10 +59,10 @@ docker pull ghcr.io/cloud-v-10xe/kube-apiserver:latest
 │  Individual build workflows (build-gcc.yml etc.)     │
 │       │                                              │
 │       ▼  runs on                                     │
-│  ┌─────────────┐        ┌──────────────────────┐    │
-│  │ Milk-V      │        │  ubuntu-latest (x86) │    │
-│  │ Pioneer Box │        │  for Docker images   │    │
-│  │ (riscv64)   │        └──────────────────────┘    │
+│  ┌─────────────┐        ┌──────────────────────┐     │
+│  │    RISE     │        │  ubuntu-latest (x86) │     │
+│  │             │        │  for Docker images   │     │
+│  │   Runners   │        └──────────────────────┘     │
 │  └─────────────┘                                     │
 │       │                                              │
 │       ▼  uploads artifact                            │
@@ -73,13 +73,13 @@ docker pull ghcr.io/cloud-v-10xe/kube-apiserver:latest
 └─────────────────────────────────────────────────────┘
 ```
 
-Each package has its own workflow file in `.github/workflows/`. Binaries are built natively on a Milk-V Pioneer box (64-core RISC-V, 128GB RAM). The central release workflow runs daily, collects the latest successful artifact from each build workflow, and bundles them into a single GitHub release. The GitHub Pages site regenerates automatically after each release.
+Each package has its own workflow file in `.github/workflows/`. The central release workflow runs daily, collects the latest successful artifact from each build workflow, and bundles them into a single GitHub release. The GitHub Pages site regenerates automatically after each release.
 
 See [docs/architecture.md](docs/architecture.md) for a detailed explanation.
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Want to add a new package or fix a failing build? See [CONTRIBUTING.md](CONTRIBUTING.md) for a step-by-step guide.
 
@@ -101,5 +101,5 @@ Each prebuilt binary retains its own upstream license.
 ---
 
 <div align="center">
-Built with ❤️ by <a href="https://github.com/Cloud-V-10xE">Cloud-V</a> on real RISC-V hardware
+Built with ❤️ by <a href="https://github.com/Cloud-V-10xE">Cloud-V</a>
 </div>

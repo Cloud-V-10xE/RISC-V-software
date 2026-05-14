@@ -1,3 +1,4 @@
+# Overlay for Ninja. Common scaffolding lives in _build-package.yaml.
 name: Build Ninja for RISC-V
 
 on:
@@ -7,79 +8,33 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Ninja RISC-V
+      apt-packages: build-essential git python3 cmake jq
+      build-script: |
+        set -eux
+        LATEST=$(curl -s https://api.github.com/repos/ninja-build/ninja/releases/latest \
+          | jq -r '.tag_name')
+        VERSION="${LATEST#v}"
+        echo "Latest Ninja: $LATEST"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            python3 \
-            cmake \
-            jq
+        git clone --depth=1 \
+          --branch "$LATEST" \
+          https://github.com/ninja-build/ninja.git \
+          "$GITHUB_WORKSPACE/ninja-src"
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE/ninja-src"
+        # Ninja bootstraps itself with a single python script
+        python3 configure.py --bootstrap
+        mkdir -p "$GITHUB_WORKSPACE/ninja-install/bin"
+        cp ninja "$GITHUB_WORKSPACE/ninja-install/bin/ninja"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        "$GITHUB_WORKSPACE/ninja-install/bin/ninja" --version
 
-      - name: Get latest Ninja version
-        id: get-version
-        run: |
-          LATEST=$(curl -s https://api.github.com/repos/ninja-build/ninja/releases/latest \
-            | jq -r '.tag_name')
-          VERSION="${LATEST#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest Ninja: $LATEST"
+        ASSET_NAME="ninja-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/ninja-install" .
 
-      - name: Clone Ninja
-        run: |
-          git clone --depth=1 \
-            --branch "${{ steps.get-version.outputs.tag }}" \
-            https://github.com/ninja-build/ninja.git \
-            "$GITHUB_WORKSPACE/ninja-src"
-
-      - name: Build Ninja
-        run: |
-          cd "$GITHUB_WORKSPACE/ninja-src"
-          # Ninja bootstraps itself with a single python script
-          python3 configure.py --bootstrap
-          mkdir -p "$GITHUB_WORKSPACE/ninja-install/bin"
-          cp ninja "$GITHUB_WORKSPACE/ninja-install/bin/ninja"
-
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/ninja-install/bin/ninja" --version
-
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="ninja-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/ninja-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"

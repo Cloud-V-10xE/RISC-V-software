@@ -1,4 +1,6 @@
+# Overlay for Bazelisk. Common scaffolding lives in _build-package.yaml.
 name: Build Bazelisk for RISC-V
+
 on:
   workflow_dispatch:
   schedule:
@@ -6,109 +8,51 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.get-latest-tag.outputs.tag_name }}
-      release_name: ${{ steps.get-version.outputs.release_name }}
-      asset_name: ${{ steps.get-version.outputs.asset_name }}
-      asset_path: ${{ steps.get-version.outputs.asset_path }}
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            wget \
-            git \
-            curl \
-            file
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Bazelisk RISC-V
+      apt-packages: build-essential wget git curl file
+      setup-script: |
+        set -eux
+        if command -v go &> /dev/null; then
+          echo "Go already installed: $(go version)"
+        else
+          GO_VERSION="1.23.5"
+          wget https://go.dev/dl/go${GO_VERSION}.linux-riscv64.tar.gz
+          sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-riscv64.tar.gz
+          rm go${GO_VERSION}.linux-riscv64.tar.gz
+        fi
+        export PATH=$PATH:/usr/local/go/bin
+        echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+        go version
+      build-script: |
+        set -eux
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequests 2
+        git config --global core.compression 0
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        rm -rf "$GITHUB_WORKSPACE/bazelisk" "$GITHUB_WORKSPACE/build_output"
+        mkdir -p "$GITHUB_WORKSPACE/build_output"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        git clone --depth=1 --no-tags https://github.com/bazelbuild/bazelisk.git "$GITHUB_WORKSPACE/bazelisk"
+        cd "$GITHUB_WORKSPACE/bazelisk"
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          gcc --version
+        git fetch --tags --depth=1
+        LATEST_TAG=$(git tag -l "v*" | grep -v "rc" | sort -V | tail -n 1)
+        echo "Checking out $LATEST_TAG"
+        git fetch --depth=1 origin tag "$LATEST_TAG"
+        git checkout FETCH_HEAD
 
-      - name: Install Go
-        run: |
-          if command -v go &> /dev/null; then
-            echo "Go already installed: $(go version)"
-          else
-            GO_VERSION="1.23.5"
-            wget https://go.dev/dl/go${GO_VERSION}.linux-riscv64.tar.gz
-            sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-riscv64.tar.gz
-            rm go${GO_VERSION}.linux-riscv64.tar.gz
-          fi
+        CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -o bazelisk
+        file bazelisk
+        ./bazelisk version || echo "Bazelisk built successfully (version check may fail without network)"
 
-          export PATH=$PATH:/usr/local/go/bin
-          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
-          go version
+        VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
+        ASSET_NAME="bazelisk-${VERSION}-riscv64-linux"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        cp "$GITHUB_WORKSPACE/bazelisk/bazelisk" "$ASSET_PATH"
+        chmod +x "$ASSET_PATH"
 
-      - name: Clone Bazelisk and checkout latest tag
-        id: get-latest-tag
-        run: |
-          set -eux
-          git config --global http.postBuffer 524288000
-          git config --global http.maxRequests 2
-          git config --global core.compression 0
-
-          rm -rf "$GITHUB_WORKSPACE/bazelisk" "$GITHUB_WORKSPACE/build_output"
-          mkdir -p "$GITHUB_WORKSPACE/build_output"
-
-          git clone --depth=1 --no-tags https://github.com/bazelbuild/bazelisk.git "$GITHUB_WORKSPACE/bazelisk"
-          cd "$GITHUB_WORKSPACE/bazelisk"
-
-          git fetch --tags --depth=1
-          LATEST_TAG=$(git tag -l "v*" | grep -v "rc" | sort -V | tail -n 1)
-          echo "Checking out $LATEST_TAG"
-          git fetch --depth=1 origin tag "$LATEST_TAG"
-          git checkout FETCH_HEAD
-
-          echo "tag_name=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Build Bazelisk
-        run: |
-          cd "$GITHUB_WORKSPACE/bazelisk"
-          CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -o bazelisk
-          file bazelisk
-          ./bazelisk version || echo "Bazelisk built successfully (version check may fail without network)"
-
-      - name: Get Bazelisk version and set outputs
-        id: get-version
-        run: |
-          BAZELISK_VERSION=$(echo "${{ steps.get-latest-tag.outputs.tag_name }}" | sed 's/^v//')
-          ASSET_NAME="bazelisk-${BAZELISK_VERSION}-riscv64-linux"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "release_name=Bazelisk ${BAZELISK_VERSION} RISC-V" >> "$GITHUB_OUTPUT"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Copy binary to asset path
-        run: |
-          cp "$GITHUB_WORKSPACE/bazelisk/bazelisk" "${{ steps.get-version.outputs.asset_path }}"
-          chmod +x "${{ steps.get-version.outputs.asset_path }}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.get-version.outputs.asset_name }}
-          path: ${{ steps.get-version.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

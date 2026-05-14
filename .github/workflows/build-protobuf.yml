@@ -1,3 +1,4 @@
+# Overlay for Protobuf. Common scaffolding lives in _build-package.yaml.
 name: Build Protobuf for RISC-V
 
 on:
@@ -7,98 +8,50 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
-
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            jq \
-            cmake \
-            ninja-build \
-            zlib1g-dev
-
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
-
-      - name: Get latest Protobuf version
-        id: get-version
-        run: |
-          # Protobuf v27+ removed abseil as a submodule and switched to
-          # CMake FetchContent which requires network at configure time.
-          # The self-hosted runner blocks outbound CMake downloads so we
-          # pin to the latest v26.x which still bundles abseil as a submodule.
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Protobuf RISC-V
+      apt-packages: build-essential git jq cmake ninja-build zlib1g-dev
+      build-script: |
+        set -eux
+        # Protobuf v27+ removed abseil as a submodule and switched to
+        # CMake FetchContent which requires network at configure time.
+        # The self-hosted runner blocks outbound CMake downloads so we
+        # pin to the latest v26.x which still bundles abseil as a submodule.
+        LATEST=$(curl -s "https://api.github.com/repos/protocolbuffers/protobuf/releases?per_page=100" \
+          | jq -r '[.[] | select(.prerelease == false) | select(.tag_name | startswith("v26."))] | .[0].tag_name')
+        if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
           LATEST=$(curl -s "https://api.github.com/repos/protocolbuffers/protobuf/releases?per_page=100" \
-            | jq -r '[.[] | select(.prerelease == false) | select(.tag_name | startswith("v26."))] | .[0].tag_name')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            LATEST=$(curl -s "https://api.github.com/repos/protocolbuffers/protobuf/releases?per_page=100" \
-              | jq -r '[.[] | select(.prerelease == false) | select(.tag_name | startswith("v25."))] | .[0].tag_name')
-          fi
-          VERSION="${LATEST#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Building Protobuf: $LATEST"
+            | jq -r '[.[] | select(.prerelease == false) | select(.tag_name | startswith("v25."))] | .[0].tag_name')
+        fi
+        VERSION="${LATEST#v}"
+        echo "Building Protobuf: $LATEST"
 
-      - name: Clone Protobuf
-        run: |
-          git clone --depth=1 \
-            --branch "${{ steps.get-version.outputs.tag }}" \
-            https://github.com/protocolbuffers/protobuf.git \
-            "$GITHUB_WORKSPACE/protobuf-src"
-          cd "$GITHUB_WORKSPACE/protobuf-src"
-          # Init all submodules recursively — submodule structure varies
-          # between versions so we let git handle it rather than naming
-          # specific paths which may not exist in newer releases
-          git submodule update --init --recursive --depth=1
+        git clone --depth=1 \
+          --branch "$LATEST" \
+          https://github.com/protocolbuffers/protobuf.git \
+          "$GITHUB_WORKSPACE/protobuf-src"
+        cd "$GITHUB_WORKSPACE/protobuf-src"
+        # Init all submodules recursively — submodule structure varies
+        # between versions so we let git handle it rather than naming
+        # specific paths which may not exist in newer releases
+        git submodule update --init --recursive --depth=1
 
-      - name: Build Protobuf
-        run: |
-          cd "$GITHUB_WORKSPACE/protobuf-src"
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/protobuf-install" \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DABSL_PROPAGATE_CXX_STD=ON \
-            -Dprotobuf_BUILD_TESTS=OFF \
-            -G Ninja
-          cmake --build build --parallel $(nproc)
-          cmake --install build
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/protobuf-install" \
+          -DCMAKE_CXX_STANDARD=17 \
+          -DABSL_PROPAGATE_CXX_STD=ON \
+          -Dprotobuf_BUILD_TESTS=OFF \
+          -G Ninja
+        cmake --build build --parallel $(nproc)
+        cmake --install build
 
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/protobuf-install/bin/protoc" --version
+        "$GITHUB_WORKSPACE/protobuf-install/bin/protoc" --version
 
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="protobuf-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
+        ASSET_NAME="protobuf-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/protobuf-install" .
 
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/protobuf-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"

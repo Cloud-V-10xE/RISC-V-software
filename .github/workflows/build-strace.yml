@@ -1,4 +1,6 @@
+# Overlay for strace. Common scaffolding lives in _build-package.yaml.
 name: Build strace for RISC-V
+
 on:
   workflow_dispatch:
   schedule:
@@ -6,116 +8,44 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.get-latest-tag.outputs.tag_name }}
-      release_name: ${{ steps.get-version.outputs.release_name }}
-      asset_name: ${{ steps.get-version.outputs.asset_name }}
-      asset_path: ${{ steps.get-version.outputs.asset_path }}
-    steps:
-      - name: Install dependencies
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            make \
-            git \
-            autoconf \
-            automake \
-            wget \
-            python3
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: strace RISC-V
+      apt-packages: build-essential make git autoconf automake wget python3
+      setup-script: |
+        set -eux
+        mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
+      build-script: |
+        set -eux
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequests 2
+        git config --global core.compression 0
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        rm -rf "$GITHUB_WORKSPACE/strace"
+        git clone --depth=1 --no-tags https://github.com/strace/strace.git "$GITHUB_WORKSPACE/strace"
+        cd "$GITHUB_WORKSPACE/strace"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        git fetch --tags --depth=1
+        git submodule update --recursive --remote
+        LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
+        echo "Checking out $LATEST_TAG"
+        git fetch --depth=1 origin tag "$LATEST_TAG"
+        git checkout FETCH_HEAD
 
-      - name: Setup directories
-        run: mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
+        ./bootstrap
+        mkdir -p build
+        cd build
+        ../configure --prefix="$GITHUB_WORKSPACE/installed_binaries"
+        make -j$(nproc)
+        make install
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          gcc --version
-          g++ --version
-          ldd --version
+        "$GITHUB_WORKSPACE/installed_binaries/bin/strace" --version
 
-      - name: Clone strace and checkout latest tag
-        id: get-latest-tag
-        run: |
-          set -eux
-          git config --global http.postBuffer 524288000
-          git config --global http.maxRequests 2
-          git config --global core.compression 0
+        STRACE_VERSION=$("$GITHUB_WORKSPACE/installed_binaries/bin/strace" -V | head -n1 | awk '{print $4}')
+        ASSET_NAME="strace-${STRACE_VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/installed_binaries" .
 
-          rm -rf "$GITHUB_WORKSPACE/strace"
-          git clone --depth=1 --no-tags https://github.com/strace/strace.git "$GITHUB_WORKSPACE/strace"
-          cd "$GITHUB_WORKSPACE/strace"
-
-          git fetch --tags --depth=1
-          git submodule update --recursive --remote
-          LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
-          echo "Checking out $LATEST_TAG"
-          git fetch --depth=1 origin tag "$LATEST_TAG"
-          git checkout FETCH_HEAD
-
-          echo "tag_name=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Configure
-        run: |
-          cd "$GITHUB_WORKSPACE/strace"
-          ./bootstrap
-          mkdir -p build
-          cd build
-          ../configure --prefix="$GITHUB_WORKSPACE/installed_binaries"
-
-      - name: Build
-        run: |
-          cd "$GITHUB_WORKSPACE/strace/build"
-          make -j$(nproc)
-
-      - name: Install
-        run: |
-          cd "$GITHUB_WORKSPACE/strace/build"
-          make install
-
-      - name: Verify installation
-        run: |
-          "$GITHUB_WORKSPACE/installed_binaries/bin/strace" --version
-
-      - name: Get strace version and set outputs
-        id: get-version
-        run: |
-          STRACE_VERSION=$("$GITHUB_WORKSPACE/installed_binaries/bin/strace" -V | head -n1 | awk '{print $4}')
-          ASSET_NAME="strace-${STRACE_VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "release_name=strace ${STRACE_VERSION} RISC-V" >> "$GITHUB_OUTPUT"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package binaries
-        run: |
-          tar -czf "${{ steps.get-version.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/installed_binaries" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.get-version.outputs.asset_name }}
-          path: ${{ steps.get-version.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

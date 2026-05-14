@@ -1,3 +1,4 @@
+# Overlay for SQLite. Common scaffolding lives in _build-package.yaml.
 name: Build SQLite for RISC-V
 
 on:
@@ -7,92 +8,45 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: SQLite RISC-V
+      apt-packages: build-essential wget tcl-dev libreadline-dev zlib1g-dev
+      build-script: |
+        set -eux
+        # SQLite doesn't use GitHub releases — fetch from their download page
+        TARBALL=$(curl -s "https://www.sqlite.org/download.html" \
+          | grep -o 'sqlite-autoconf-[0-9]*\.tar\.gz' \
+          | head -n1)
+        # Extract numeric version e.g. 3460000 -> 3.46.0
+        NUMVER=$(echo "$TARBALL" | grep -o '[0-9]*' | head -n1)
+        MAJOR=$(echo $NUMVER | cut -c1)
+        MINOR=$(echo $NUMVER | cut -c2-3 | sed 's/^0//')
+        PATCH=$(echo $NUMVER | cut -c4-5 | sed 's/^0//')
+        VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        YEAR=$(curl -s "https://www.sqlite.org/download.html" \
+          | grep -o '20[0-9][0-9]/sqlite-autoconf' | head -n1 | cut -c1-4)
+        DOWNLOAD_URL="https://www.sqlite.org/${YEAR}/${TARBALL}"
+        echo "Latest SQLite: $VERSION ($TARBALL)"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            wget \
-            tcl-dev \
-            libreadline-dev \
-            zlib1g-dev
+        cd "$GITHUB_WORKSPACE"
+        wget -q "$DOWNLOAD_URL"
+        tar -xzf "$TARBALL"
+        SRCDIR=$(basename "$TARBALL" .tar.gz)
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        cd "$SRCDIR"
+        ./configure \
+          --prefix="$GITHUB_WORKSPACE/sqlite-install" \
+          --enable-readline \
+          --enable-fts5
+        make -j$(nproc)
+        make install
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        "$GITHUB_WORKSPACE/sqlite-install/bin/sqlite3" --version
 
-      - name: Get latest SQLite version
-        id: get-version
-        run: |
-          # SQLite doesn't use GitHub releases — fetch from their download page
-          LATEST_JSON=$(curl -s "https://www.sqlite.org/download.html" \
-            | grep -o 'sqlite-autoconf-[0-9]*\.tar\.gz' \
-            | head -n1)
-          TARBALL="${LATEST_JSON}"
-          # Extract numeric version e.g. 3460000 → 3.46.0
-          NUMVER=$(echo "$TARBALL" | grep -o '[0-9]*' | head -n1)
-          MAJOR=$(echo $NUMVER | cut -c1)
-          MINOR=$(echo $NUMVER | cut -c2-3 | sed 's/^0//')
-          PATCH=$(echo $NUMVER | cut -c4-5 | sed 's/^0//')
-          VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          YEAR=$(curl -s "https://www.sqlite.org/download.html" \
-            | grep -o '20[0-9][0-9]/sqlite-autoconf' | head -n1 | cut -c1-4)
-          DOWNLOAD_URL="https://www.sqlite.org/${YEAR}/${TARBALL}"
+        ASSET_NAME="sqlite-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/sqlite-install" .
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
-          echo "Latest SQLite: $VERSION ($TARBALL)"
-
-      - name: Download and build SQLite
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          wget -q "${{ steps.get-version.outputs.download_url }}"
-          tar -xzf "${{ steps.get-version.outputs.tarball }}"
-          SRCDIR=$(basename "${{ steps.get-version.outputs.tarball }}" .tar.gz)
-
-          cd "$SRCDIR"
-          ./configure \
-            --prefix="$GITHUB_WORKSPACE/sqlite-install" \
-            --enable-readline \
-            --enable-fts5
-          make -j$(nproc)
-          make install
-
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/sqlite-install/bin/sqlite3" --version
-
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="sqlite-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/sqlite-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"

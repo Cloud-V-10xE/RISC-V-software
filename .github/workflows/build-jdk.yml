@@ -1,3 +1,4 @@
+# Overlay for OpenJDK. Common scaffolding lives in _build-package.yaml.
 name: Build OpenJDK for RISC-V
 
 on:
@@ -7,137 +8,51 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.get-latest-tag.outputs.tag_name }}
-      release_name: ${{ steps.get-version.outputs.release_name }}
-      asset_name: ${{ steps.get-version.outputs.asset_name }}
-      asset_path: ${{ steps.get-version.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: OpenJDK RISC-V
+      setup-script: |
+        set -eux
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt remove openjdk-* -y || true
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential autoconf make zip unzip file pkg-config \
+          libx11-dev libxext-dev libxrender-dev libxrandr-dev \
+          libxtst-dev libxt-dev libcups2-dev libfontconfig1-dev \
+          libasound2-dev libffi-dev libfreetype6-dev libpng-dev \
+          libjpeg-dev ca-certificates locales wget curl git python3 \
+          gawk pandoc xsltproc gnutls-bin openjdk-25-jdk tree
+        BOOT_JAVA_HOME=$(dirname "$(dirname "$(readlink -f "$(which javac)")")")
+        echo "BOOT_JAVA_HOME=$BOOT_JAVA_HOME" >> "$GITHUB_ENV"
+      build-script: |
+        set -eux
+        git config --global http.version HTTP/2
+        git config --global http.postBuffer 1048576000
 
-    steps:
-      - name: Install dependencies
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update
-          sudo apt remove openjdk-* -y || true
-          sudo apt-get install -y \
-            build-essential \
-            autoconf \
-            make \
-            zip \
-            unzip \
-            file \
-            pkg-config \
-            libx11-dev \
-            libxext-dev \
-            libxrender-dev \
-            libxrandr-dev \
-            libxtst-dev \
-            libxt-dev \
-            libcups2-dev \
-            libfontconfig1-dev \
-            libasound2-dev \
-            libffi-dev \
-            libfreetype6-dev \
-            libpng-dev \
-            libjpeg-dev \
-            ca-certificates \
-            locales \
-            wget \
-            curl \
-            git \
-            python3 \
-            gawk \
-            pandoc \
-            xsltproc \
-            gnutls-bin \
-            openjdk-25-jdk \
-            tree
+        rm -rf "$GITHUB_WORKSPACE/jdk"
+        git clone --depth=1 --no-tags https://github.com/openjdk/jdk.git "$GITHUB_WORKSPACE/jdk"
+        cd "$GITHUB_WORKSPACE/jdk"
 
-          BOOT_JAVA_HOME=$(dirname "$(dirname "$(readlink -f "$(which javac)")")")
-          echo "BOOT_JAVA_HOME=$BOOT_JAVA_HOME" >> "$GITHUB_ENV"
+        git fetch --tags --depth=1
+        LATEST_TAG=$(git tag -l "jdk*" | sort -V | tail -n 1)
+        echo "Checking out $LATEST_TAG"
+        git fetch --depth=1 origin tag "$LATEST_TAG"
+        git checkout FETCH_HEAD
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        bash configure
+        make JOBS=$(nproc) images
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        "$GITHUB_WORKSPACE/jdk/build/linux-riscv64-server-release/images/jdk/bin/java" --version
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          gcc --version
-          g++ --version
-          ldd --version
+        JDK_VERSION=$("$GITHUB_WORKSPACE/jdk/build/linux-riscv64-server-release/images/jdk/bin/java" --version | head -n1 | awk '{print $2}')
+        echo "Detected built JDK version: $JDK_VERSION"
 
-      - name: Clone OpenJDK and checkout latest tag
-        id: get-latest-tag
-        run: |
-          set -eux
-          git config --global http.version HTTP/2
-          git config --global http.postBuffer 1048576000
+        ASSET_NAME="openjdk-${JDK_VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" \
+          -C "$GITHUB_WORKSPACE/jdk/build/linux-riscv64-server-release/images" jdk
 
-          rm -rf "$GITHUB_WORKSPACE/jdk"
-          git clone --depth=1 --no-tags https://github.com/openjdk/jdk.git "$GITHUB_WORKSPACE/jdk"
-          cd "$GITHUB_WORKSPACE/jdk"
-
-          git fetch --tags --depth=1
-          LATEST_TAG=$(git tag -l "jdk*" | sort -V | tail -n 1)
-          echo "Checking out $LATEST_TAG"
-          git fetch --depth=1 origin tag "$LATEST_TAG"
-          git checkout FETCH_HEAD
-
-          echo "tag_name=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Configure
-        run: |
-          cd "$GITHUB_WORKSPACE/jdk"
-          bash configure
-
-      - name: Build
-        run: |
-          cd "$GITHUB_WORKSPACE/jdk"
-          make JOBS=$(nproc) images
-
-      - name: Verify installation
-        run: |
-          "$GITHUB_WORKSPACE/jdk/build/linux-riscv64-server-release/images/jdk/bin/java" --version
-
-      - name: Get JDK version and set outputs
-        id: get-version
-        run: |
-          set -eux
-          JDK_VERSION=$("$GITHUB_WORKSPACE/jdk/build/linux-riscv64-server-release/images/jdk/bin/java" --version | head -n1 | awk '{print $2}')
-          echo "Detected built JDK version: $JDK_VERSION"
-
-          ASSET_NAME="openjdk-${JDK_VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-
-          echo "release_name=OpenJDK ${JDK_VERSION} RISC-V" >> "$GITHUB_OUTPUT"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package binaries
-        run: |
-          tar -czf "${{ steps.get-version.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/jdk/build/linux-riscv64-server-release/images" jdk
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.get-version.outputs.asset_name }}
-          path: ${{ steps.get-version.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

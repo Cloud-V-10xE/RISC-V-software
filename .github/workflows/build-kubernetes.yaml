@@ -164,145 +164,89 @@ jobs:
 
   build-riscv:
     needs: get-versions
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential git rsync jq curl wget
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Kubernetes RISC-V
+      apt-packages: build-essential git rsync jq curl wget
+      setup-script: |
+        set -eux
+        GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | head -n1)
+        wget -q "https://go.dev/dl/${GO_VERSION}.linux-riscv64.tar.gz"
+        sudo rm -rf /usr/local/go
+        sudo tar -C /usr/local -xzf "${GO_VERSION}.linux-riscv64.tar.gz"
+        rm "${GO_VERSION}.linux-riscv64.tar.gz"
+        echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+        /usr/local/go/bin/go version
+      build-script: |
+        set -eux
+        K8S_TAG="${{ needs.get-versions.outputs.k8s_tag }}"
+        CNI_VERSION="${{ needs.get-versions.outputs.cni_version }}"
+        FLANNEL_VERSION="${{ needs.get-versions.outputs.flannel_version }}"
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequests 2
+        git config --global core.compression 0
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          gcc --version
-          g++ --version
-          ldd --version
+        rm -rf "$GITHUB_WORKSPACE/kubernetes"
+        git clone --depth=1 --no-tags \
+          https://github.com/kubernetes/kubernetes.git \
+          "$GITHUB_WORKSPACE/kubernetes"
+        cd "$GITHUB_WORKSPACE/kubernetes"
+        git fetch --depth=1 origin tag "$K8S_TAG"
+        git checkout FETCH_HEAD
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        go mod download
+        echo "Building Kubernetes for linux/riscv64..."
+        KUBE_BUILD_PLATFORMS=linux/riscv64 make all \
+          WHAT="cmd/kube-apiserver cmd/kube-controller-manager cmd/kube-scheduler cmd/kubelet cmd/kube-proxy cmd/kubectl cmd/kubeadm"
+        echo "Build completed!"
 
-      - name: Setup Go
-        run: |
-          GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | head -n1)
-          wget -q "https://go.dev/dl/${GO_VERSION}.linux-riscv64.tar.gz"
-          sudo rm -rf /usr/local/go
-          sudo tar -C /usr/local -xzf "${GO_VERSION}.linux-riscv64.tar.gz"
-          rm "${GO_VERSION}.linux-riscv64.tar.gz"
-          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
-          /usr/local/go/bin/go version
+        rm -rf "$GITHUB_WORKSPACE/cni-plugins"
+        git clone --depth=1 \
+          --branch "${CNI_VERSION}" \
+          https://github.com/containernetworking/plugins.git \
+          "$GITHUB_WORKSPACE/cni-plugins"
+        cd "$GITHUB_WORKSPACE/cni-plugins"
+        ./build_linux.sh
 
-      - name: Clone Kubernetes and checkout version
-        run: |
-          set -eux
-          git config --global http.postBuffer 524288000
-          git config --global http.maxRequests 2
-          git config --global core.compression 0
+        rm -rf "$GITHUB_WORKSPACE/flannel"
+        git clone --depth=1 \
+          --branch "$FLANNEL_VERSION" \
+          https://github.com/flannel-io/flannel.git \
+          "$GITHUB_WORKSPACE/flannel"
+        cd "$GITHUB_WORKSPACE/flannel"
+        GOARCH=riscv64 make dist/flanneld
 
-          rm -rf "$GITHUB_WORKSPACE/kubernetes"
-          git clone --depth=1 --no-tags \
-            https://github.com/kubernetes/kubernetes.git \
-            "$GITHUB_WORKSPACE/kubernetes"
-          cd "$GITHUB_WORKSPACE/kubernetes"
-          git fetch --depth=1 origin tag "${{ needs.get-versions.outputs.k8s_tag }}"
-          git checkout FETCH_HEAD
+        cd "$GITHUB_WORKSPACE/kubernetes"
+        if [ -d "_output/local/go/bin" ]; then
+          BIN_DIR="_output/local/go/bin"
+        elif [ -d "_output/bin" ]; then
+          BIN_DIR="_output/bin"
+        else
+          echo "ERROR: Could not find binary output directory"
+          exit 1
+        fi
 
-      - name: Build Kubernetes binaries for RISC-V
-        run: |
-          cd "$GITHUB_WORKSPACE/kubernetes"
-          go mod download
-          echo "Building Kubernetes for linux/riscv64..."
-          KUBE_BUILD_PLATFORMS=linux/riscv64 make all \
-            WHAT="cmd/kube-apiserver cmd/kube-controller-manager cmd/kube-scheduler cmd/kubelet cmd/kube-proxy cmd/kubectl cmd/kubeadm"
-          echo "Build completed!"
+        mkdir -p "$GITHUB_WORKSPACE/k8s-riscv64-binaries/bin"
+        mkdir -p "$GITHUB_WORKSPACE/k8s-riscv64-binaries/cni"
+        mkdir -p "$GITHUB_WORKSPACE/k8s-riscv64-binaries/flannel"
 
-      - name: Build CNI plugins for RISC-V
-        run: |
-          CNI_VERSION="${{ needs.get-versions.outputs.cni_version }}"
-          rm -rf "$GITHUB_WORKSPACE/cni-plugins"
-          git clone --depth=1 \
-            --branch "${CNI_VERSION}" \
-            https://github.com/containernetworking/plugins.git \
-            "$GITHUB_WORKSPACE/cni-plugins"
-          cd "$GITHUB_WORKSPACE/cni-plugins"
-          ./build_linux.sh
+        for BIN in kube-apiserver kube-controller-manager kube-scheduler kubelet kube-proxy kubectl kubeadm; do
+          cp -v "$BIN_DIR/$BIN" "$GITHUB_WORKSPACE/k8s-riscv64-binaries/bin/" || true
+        done
 
-      - name: Build Flannel for RISC-V
-        run: |
-          rm -rf "$GITHUB_WORKSPACE/flannel"
-          git clone --depth=1 \
-            --branch "${{ needs.get-versions.outputs.flannel_version }}" \
-            https://github.com/flannel-io/flannel.git \
-            "$GITHUB_WORKSPACE/flannel"
-          cd "$GITHUB_WORKSPACE/flannel"
-          GOARCH=riscv64 make dist/flanneld
+        cp -rv "$GITHUB_WORKSPACE/cni-plugins/bin/"* "$GITHUB_WORKSPACE/k8s-riscv64-binaries/cni/"
+        cp -v "$GITHUB_WORKSPACE/flannel/dist/flanneld" \
+          "$GITHUB_WORKSPACE/k8s-riscv64-binaries/flannel/"
 
-      - name: Package binaries
-        run: |
-          cd "$GITHUB_WORKSPACE/kubernetes"
+        printf '#!/bin/bash\nset -e\necho "Installing Kubernetes binaries..."\nsudo cp -v bin/* /usr/local/bin/\nsudo chmod +x /usr/local/bin/kube*\necho "Installing CNI plugins..."\nsudo mkdir -p /opt/cni/bin\nsudo cp -v cni/* /opt/cni/bin/\nsudo chmod +x /opt/cni/bin/*\necho "Installing Flannel..."\nsudo cp -v flannel/flanneld /usr/local/bin/\nsudo chmod +x /usr/local/bin/flanneld\necho "Installation complete!"\n' \
+          > "$GITHUB_WORKSPACE/k8s-riscv64-binaries/install.sh"
+        chmod +x "$GITHUB_WORKSPACE/k8s-riscv64-binaries/install.sh"
 
-          if [ -d "_output/local/go/bin" ]; then
-            BIN_DIR="_output/local/go/bin"
-          elif [ -d "_output/bin" ]; then
-            BIN_DIR="_output/bin"
-          else
-            echo "ERROR: Could not find binary output directory"
-            exit 1
-          fi
+        ASSET_NAME="kubernetes-${K8S_TAG}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/k8s-riscv64-binaries" .
 
-          mkdir -p "$GITHUB_WORKSPACE/k8s-riscv64-binaries/bin"
-          mkdir -p "$GITHUB_WORKSPACE/k8s-riscv64-binaries/cni"
-          mkdir -p "$GITHUB_WORKSPACE/k8s-riscv64-binaries/flannel"
-
-          for BIN in kube-apiserver kube-controller-manager kube-scheduler kubelet kube-proxy kubectl kubeadm; do
-            cp -v "$BIN_DIR/$BIN" "$GITHUB_WORKSPACE/k8s-riscv64-binaries/bin/" || true
-          done
-
-          cp -rv "$GITHUB_WORKSPACE/cni-plugins/bin/"* "$GITHUB_WORKSPACE/k8s-riscv64-binaries/cni/"
-          cp -v "$GITHUB_WORKSPACE/flannel/dist/flanneld" \
-            "$GITHUB_WORKSPACE/k8s-riscv64-binaries/flannel/"
-
-          cat > "$GITHUB_WORKSPACE/k8s-riscv64-binaries/install.sh" << 'INSTALL'
-          #!/bin/bash
-          set -e
-          echo "Installing Kubernetes binaries..."
-          sudo cp -v bin/* /usr/local/bin/
-          sudo chmod +x /usr/local/bin/kube*
-          echo "Installing CNI plugins..."
-          sudo mkdir -p /opt/cni/bin
-          sudo cp -v cni/* /opt/cni/bin/
-          sudo chmod +x /opt/cni/bin/*
-          echo "Installing Flannel..."
-          sudo cp -v flannel/flanneld /usr/local/bin/
-          sudo chmod +x /usr/local/bin/flanneld
-          echo "Installation complete!"
-          INSTALL
-
-          chmod +x "$GITHUB_WORKSPACE/k8s-riscv64-binaries/install.sh"
-
-          tar -czf \
-            "$GITHUB_WORKSPACE/kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-riscv64-linux.tar.gz" \
-            -C "$GITHUB_WORKSPACE/k8s-riscv64-binaries" .
-
-      - name: Upload RISC-V artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-riscv64-linux
-          path: ${{ github.workspace }}/kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-riscv64-linux.tar.gz
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

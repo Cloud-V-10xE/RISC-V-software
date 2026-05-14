@@ -1,3 +1,4 @@
+# Overlay for fzf. Common scaffolding lives in _build-package.yaml.
 name: Build fzf for RISC-V
 
 on:
@@ -7,79 +8,34 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: fzf RISC-V
+      apt-packages: build-essential git jq golang
+      build-script: |
+        set -eux
+        LATEST=$(curl -s https://api.github.com/repos/junegunn/fzf/releases/latest \
+          | jq -r '.tag_name')
+        VERSION="${LATEST#v}"
+        echo "Latest fzf: $LATEST"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            jq \
-            golang
+        git clone --depth=1 \
+          --branch "$LATEST" \
+          https://github.com/junegunn/fzf.git \
+          "$GITHUB_WORKSPACE/fzf-src"
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE/fzf-src"
+        # fzf uses a simple Makefile — produces a single binary
+        make
+        mkdir -p "$GITHUB_WORKSPACE/fzf-install/bin"
+        # Makefile outputs to target/fzf-linux_riscv64 on riscv64
+        cp target/fzf-linux_riscv64 "$GITHUB_WORKSPACE/fzf-install/bin/fzf"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        "$GITHUB_WORKSPACE/fzf-install/bin/fzf" --version
 
-      - name: Get latest fzf version
-        id: get-version
-        run: |
-          LATEST=$(curl -s https://api.github.com/repos/junegunn/fzf/releases/latest \
-            | jq -r '.tag_name')
-          VERSION="${LATEST#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest fzf: $LATEST"
+        ASSET_NAME="fzf-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/fzf-install" .
 
-      - name: Clone fzf
-        run: |
-          git clone --depth=1 \
-            --branch "${{ steps.get-version.outputs.tag }}" \
-            https://github.com/junegunn/fzf.git \
-            "$GITHUB_WORKSPACE/fzf-src"
-
-      - name: Build fzf
-        run: |
-          cd "$GITHUB_WORKSPACE/fzf-src"
-          # fzf uses a simple Makefile — produces a single binary
-          make
-          mkdir -p "$GITHUB_WORKSPACE/fzf-install/bin"
-          # Makefile outputs to target/fzf-linux_riscv64 on riscv64
-          cp target/fzf-linux_riscv64 "$GITHUB_WORKSPACE/fzf-install/bin/fzf"
-
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/fzf-install/bin/fzf" --version
-
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="fzf-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/fzf-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"

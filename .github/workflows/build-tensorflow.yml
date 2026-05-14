@@ -1,7 +1,7 @@
-name: Build TensorFlow for RISC-V
-
-# NOTE: This workflow depends on the Bazelisk build workflow
+# Overlay for TensorFlow. Common scaffolding lives in _build-package.yaml.
+# NOTE: This workflow depends on the Bazelisk build workflow.
 # Make sure you have built and released Bazelisk first!
+name: Build TensorFlow for RISC-V
 
 on:
   workflow_dispatch:
@@ -10,162 +10,79 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.get-latest-tag.outputs.tag_name }}
-      release_name: ${{ steps.get-version.outputs.release_name }}
-      asset_name: ${{ steps.get-version.outputs.asset_name }}
-      asset_path: ${{ steps.get-version.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: TensorFlow RISC-V
+      apt-packages: >-
+        build-essential python3 python3-dev python3-pip python3-venv wget git
+        pkg-config zip unzip curl openjdk-11-jdk
+      setup-script: |
+        set -eux
+        # Install Bazelisk from release
+        BAZELISK_REPO="alitariq4589/bazelisk-riscv"
+        LATEST_RELEASE=$(curl -s https://api.github.com/repos/${BAZELISK_REPO}/releases/latest)
+        BAZELISK_VERSION=$(echo "$LATEST_RELEASE" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+        BAZELISK_ASSET="bazelisk-${BAZELISK_VERSION}-riscv64-linux"
+        wget "https://github.com/${BAZELISK_REPO}/releases/latest/download/${BAZELISK_ASSET}" -O bazelisk
+        chmod +x bazelisk
+        sudo mv bazelisk /usr/local/bin/bazel
+        bazel --version
+        # Setup Python venv
+        python3 -m venv "$GITHUB_WORKSPACE/tf_env"
+        source "$GITHUB_WORKSPACE/tf_env/bin/activate"
+        pip install --upgrade pip
+        pip install numpy wheel packaging requests opt_einsum
+        pip install keras_preprocessing --no-deps
+      build-script: |
+        set -eux
+        source "$GITHUB_WORKSPACE/tf_env/bin/activate"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            python3 \
-            python3-dev \
-            python3-pip \
-            python3-venv \
-            wget \
-            git \
-            pkg-config \
-            zip \
-            unzip \
-            curl \
-            openjdk-11-jdk
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequests 2
+        git config --global core.compression 0
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        rm -rf "$GITHUB_WORKSPACE/tensorflow" "$GITHUB_WORKSPACE/build_output"
+        mkdir -p "$GITHUB_WORKSPACE/build_output"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        git clone --depth=1 --no-tags https://github.com/tensorflow/tensorflow.git "$GITHUB_WORKSPACE/tensorflow"
+        cd "$GITHUB_WORKSPACE/tensorflow"
 
-      - name: Install Bazelisk from release
-        run: |
-          BAZELISK_REPO="alitariq4589/bazelisk-riscv"
-          LATEST_RELEASE=$(curl -s https://api.github.com/repos/${BAZELISK_REPO}/releases/latest)
-          BAZELISK_VERSION=$(echo "$LATEST_RELEASE" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-          BAZELISK_ASSET="bazelisk-${BAZELISK_VERSION}-riscv64-linux"
+        git fetch --tags --depth=1
+        LATEST_TAG=$(git tag -l "v*" | grep -v "rc" | grep -v "alpha" | grep -v "beta" | sort -V | tail -n 1)
+        echo "Checking out $LATEST_TAG"
+        git fetch --depth=1 origin tag "$LATEST_TAG"
+        git checkout FETCH_HEAD
 
-          wget "https://github.com/${BAZELISK_REPO}/releases/latest/download/${BAZELISK_ASSET}" -O bazelisk
-          chmod +x bazelisk
-          sudo mv bazelisk /usr/local/bin/bazel
+        echo "8.0.0" > .bazelversion
 
-          bazel --version
+        # Configure TensorFlow
+        export PYTHON_BIN_PATH=$(which python3)
+        export PYTHON_LIB_PATH="$($PYTHON_BIN_PATH -c 'import site; print(site.getsitepackages()[0])')"
+        export TF_NEED_CUDA=0
+        export TF_NEED_ROCM=0
+        export TF_DOWNLOAD_CLANG=0
+        export TF_SET_ANDROID_WORKSPACE=0
+        export CC_OPT_FLAGS="-march=native -O3"
+        ./configure
 
-      - name: Setup Python environment
-        run: |
-          python3 -m venv "$GITHUB_WORKSPACE/tf_env"
-          source "$GITHUB_WORKSPACE/tf_env/bin/activate"
-          pip install --upgrade pip
-          pip install numpy wheel packaging requests opt_einsum
-          pip install keras_preprocessing --no-deps
+        # Build TensorFlow
+        bazel build --jobs=$(nproc) \
+          --local_ram_resources=8192 \
+          --config=opt \
+          //tensorflow/tools/pip_package:build_pip_package
 
-      - name: Check environment
-        run: |
-          set -eux
-          uname -a
-          gcc --version
-          g++ --version
-          python3 --version
-          bazel --version
-          java -version
+        # Build wheel package
+        ./bazel-bin/tensorflow/tools/pip_package/build_pip_package \
+          "$GITHUB_WORKSPACE/build_output"
 
-      - name: Clone TensorFlow and checkout latest tag
-        id: get-latest-tag
-        run: |
-          set -eux
-          git config --global http.postBuffer 524288000
-          git config --global http.maxRequests 2
-          git config --global core.compression 0
+        WHEEL_FILE=$(ls "$GITHUB_WORKSPACE/build_output"/*.whl | head -n 1)
+        WHEEL_NAME=$(basename "$WHEEL_FILE")
+        TF_VERSION=$(echo "$WHEEL_NAME" | grep -oP 'tensorflow-\K[0-9]+\.[0-9]+\.[0-9]+')
 
-          rm -rf "$GITHUB_WORKSPACE/tensorflow" "$GITHUB_WORKSPACE/build_output"
-          mkdir -p "$GITHUB_WORKSPACE/build_output"
+        ASSET_NAME="tensorflow-${TF_VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/build_output" .
 
-          git clone --depth=1 --no-tags https://github.com/tensorflow/tensorflow.git "$GITHUB_WORKSPACE/tensorflow"
-          cd "$GITHUB_WORKSPACE/tensorflow"
-
-          git fetch --tags --depth=1
-          LATEST_TAG=$(git tag -l "v*" | grep -v "rc" | grep -v "alpha" | grep -v "beta" | sort -V | tail -n 1)
-          echo "Checking out $LATEST_TAG"
-          git fetch --depth=1 origin tag "$LATEST_TAG"
-          git checkout FETCH_HEAD
-
-          echo "8.0.0" > .bazelversion
-
-          echo "tag_name=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Configure TensorFlow
-        run: |
-          source "$GITHUB_WORKSPACE/tf_env/bin/activate"
-          cd "$GITHUB_WORKSPACE/tensorflow"
-
-          export PYTHON_BIN_PATH=$(which python3)
-          export PYTHON_LIB_PATH="$($PYTHON_BIN_PATH -c 'import site; print(site.getsitepackages()[0])')"
-          export TF_NEED_CUDA=0
-          export TF_NEED_ROCM=0
-          export TF_DOWNLOAD_CLANG=0
-          export TF_SET_ANDROID_WORKSPACE=0
-          export CC_OPT_FLAGS="-march=native -O3"
-
-          ./configure
-
-      - name: Build TensorFlow
-        run: |
-          source "$GITHUB_WORKSPACE/tf_env/bin/activate"
-          cd "$GITHUB_WORKSPACE/tensorflow"
-
-          bazel build --jobs=$(nproc) \
-            --local_ram_resources=8192 \
-            --config=opt \
-            //tensorflow/tools/pip_package:build_pip_package
-
-      - name: Build wheel package
-        run: |
-          source "$GITHUB_WORKSPACE/tf_env/bin/activate"
-          cd "$GITHUB_WORKSPACE/tensorflow"
-
-          ./bazel-bin/tensorflow/tools/pip_package/build_pip_package \
-            "$GITHUB_WORKSPACE/build_output"
-
-      - name: Get TensorFlow version and set outputs
-        id: get-version
-        run: |
-          source "$GITHUB_WORKSPACE/tf_env/bin/activate"
-
-          WHEEL_FILE=$(ls "$GITHUB_WORKSPACE/build_output"/*.whl | head -n 1)
-          WHEEL_NAME=$(basename "$WHEEL_FILE")
-
-          TF_VERSION=$(echo "$WHEEL_NAME" | grep -oP 'tensorflow-\K[0-9]+\.[0-9]+\.[0-9]+')
-
-          ASSET_NAME="tensorflow-${TF_VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-
-          echo "release_name=TensorFlow ${TF_VERSION} RISC-V" >> "$GITHUB_OUTPUT"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package wheel
-        run: |
-          tar -czf "${{ steps.get-version.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/build_output" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.get-version.outputs.asset_name }}
-          path: ${{ steps.get-version.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

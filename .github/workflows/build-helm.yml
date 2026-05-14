@@ -1,3 +1,4 @@
+# Overlay for Helm. Common scaffolding lives in _build-package.yaml.
 name: Build Helm for RISC-V
 
 on:
@@ -7,78 +8,33 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Helm RISC-V
+      apt-packages: build-essential git golang jq
+      build-script: |
+        set -eux
+        LATEST=$(curl -s https://api.github.com/repos/helm/helm/releases/latest \
+          | jq -r '.tag_name')
+        VERSION="${LATEST#v}"
+        echo "Latest Helm: $LATEST"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            golang \
-            jq
+        git clone --depth=1 \
+          --branch "$LATEST" \
+          https://github.com/helm/helm.git \
+          "$GITHUB_WORKSPACE/helm-src"
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE/helm-src"
+        # Helm uses make to build — produces a single binary
+        make build-cross TARGETS=linux/riscv64
+        mkdir -p "$GITHUB_WORKSPACE/helm-install/bin"
+        cp "_dist/linux-riscv64/helm" "$GITHUB_WORKSPACE/helm-install/bin/helm"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        "$GITHUB_WORKSPACE/helm-install/bin/helm" version --short
 
-      - name: Get latest Helm version
-        id: get-version
-        run: |
-          LATEST=$(curl -s https://api.github.com/repos/helm/helm/releases/latest \
-            | jq -r '.tag_name')
-          VERSION="${LATEST#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest Helm: $LATEST"
+        ASSET_NAME="helm-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/helm-install" .
 
-      - name: Clone Helm
-        run: |
-          git clone --depth=1 \
-            --branch "${{ steps.get-version.outputs.tag }}" \
-            https://github.com/helm/helm.git \
-            "$GITHUB_WORKSPACE/helm-src"
-
-      - name: Build Helm
-        run: |
-          cd "$GITHUB_WORKSPACE/helm-src"
-          # Helm uses make to build — produces a single binary
-          make build-cross TARGETS=linux/riscv64
-          mkdir -p "$GITHUB_WORKSPACE/helm-install/bin"
-          cp "_dist/linux-riscv64/helm" "$GITHUB_WORKSPACE/helm-install/bin/helm"
-
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/helm-install/bin/helm" version --short
-
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="helm-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/helm-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"

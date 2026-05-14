@@ -1,0 +1,120 @@
+# Reusable "base" workflow for all RISC-V package builds.
+#
+# This file owns everything that every build-* workflow had in common:
+#   - the self-hosted runner (runs-on)
+#   - permissions
+#   - apt dependency installation
+#   - workspace cleanup
+#   - repo checkout
+#   - artifact upload
+#   - the optional GitHub Pages refresh dispatch
+#
+# Each build-<package>.yml is now a thin "overlay": it only declares the
+# triggers (cron schedule) and passes the package-specific bits in via
+# `with:`. Think of this as the kustomize base; the build-*.yml files are
+# the overlays.
+#
+# Contract for `build-script`:
+#   The script runs as a single bash step. It is responsible for fetching,
+#   building, verifying and staging the package. When done it MUST export
+#   the final artifact location by appending two lines to $GITHUB_ENV:
+#       echo "ASSET_NAME=<file name>"  >> "$GITHUB_ENV"
+#       echo "ASSET_PATH=<abs path>"   >> "$GITHUB_ENV"
+#   Those are picked up by the Upload artifact step below.
+
+name: Reusable RISC-V package build
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: Human-readable package name (used only for the job label).
+        required: true
+        type: string
+      runner:
+        description: Runner label to execute on.
+        required: false
+        type: string
+        default: ubuntu-24.04-riscv
+      apt-packages:
+        description: >-
+          apt packages to install before building. Space- or newline-
+          separated. Leave empty to skip apt installation entirely.
+        required: false
+        type: string
+        default: ""
+      clean-workspace:
+        description: Wipe $GITHUB_WORKSPACE with elevated permissions before checkout.
+        required: false
+        type: boolean
+        default: true
+      checkout:
+        description: Check out this repository before building.
+        required: false
+        type: boolean
+        default: true
+      setup-script:
+        description: >-
+          Optional shell run after checkout but before the main build
+          (extra toolchains, language runtimes, virtualenvs, etc.).
+        required: false
+        type: string
+        default: ""
+      build-script:
+        description: >-
+          Main shell script: fetch, build, verify and stage the package.
+          Must export ASSET_NAME and ASSET_PATH to $GITHUB_ENV when done.
+        required: true
+        type: string
+      trigger-pages:
+        description: Send a repository_dispatch event to refresh GitHub Pages on success.
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build ${{ inputs.package-name }}
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Install apt dependencies
+        if: inputs.apt-packages != ''
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.apt-packages }}
+
+      - name: Clean workspace with elevated permissions
+        if: inputs.clean-workspace
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+
+      - name: Checkout repo
+        if: inputs.checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Setup
+        if: inputs.setup-script != ''
+        run: ${{ inputs.setup-script }}
+
+      - name: Build ${{ inputs.package-name }}
+        run: ${{ inputs.build-script }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ env.ASSET_PATH }}
+
+      - name: Trigger Pages update
+        if: success() && inputs.trigger-pages
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: update-pages

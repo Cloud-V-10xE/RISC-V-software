@@ -1,3 +1,4 @@
+# Overlay for Zstd. Common scaffolding lives in _build-package.yaml.
 name: Build Zstd for RISC-V
 
 on:
@@ -7,84 +8,32 @@ on:
 
 jobs:
   build:
-    runs-on: RISCV64
-    permissions:
-      contents: write
-    outputs:
-      asset_name: ${{ steps.set-outputs.outputs.asset_name }}
-      asset_path: ${{ steps.set-outputs.outputs.asset_path }}
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Zstd RISC-V
+      apt-packages: build-essential git jq cmake ninja-build
+      build-script: |
+        set -eux
+        LATEST=$(curl -s https://api.github.com/repos/facebook/zstd/releases/latest \
+          | jq -r '.tag_name')
+        VERSION="${LATEST#v}"
+        echo "Latest Zstd: $LATEST"
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            jq \
-            cmake \
-            ninja-build
+        git clone --depth=1 \
+          --branch "$LATEST" \
+          https://github.com/facebook/zstd.git \
+          "$GITHUB_WORKSPACE/zstd-src"
 
-      - name: Clean workspace with elevated permissions
-        run: |
-          sudo rm -rf "$GITHUB_WORKSPACE"
-          mkdir -p "$GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE/zstd-src"
+        make -j$(nproc) PREFIX="$GITHUB_WORKSPACE/zstd-install"
+        make install PREFIX="$GITHUB_WORKSPACE/zstd-install"
 
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          clean: false
+        "$GITHUB_WORKSPACE/zstd-install/bin/zstd" --version
 
-      - name: Get latest Zstd version
-        id: get-version
-        run: |
-          LATEST=$(curl -s https://api.github.com/repos/facebook/zstd/releases/latest \
-            | jq -r '.tag_name')
-          VERSION="${LATEST#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Latest Zstd: $LATEST"
+        ASSET_NAME="zstd-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/zstd-install" .
 
-      - name: Clone Zstd
-        run: |
-          git clone --depth=1 \
-            --branch "${{ steps.get-version.outputs.tag }}" \
-            https://github.com/facebook/zstd.git \
-            "$GITHUB_WORKSPACE/zstd-src"
-
-      - name: Build Zstd
-        run: |
-          cd "$GITHUB_WORKSPACE/zstd-src"
-          make -j$(nproc) PREFIX="$GITHUB_WORKSPACE/zstd-install"
-          make install PREFIX="$GITHUB_WORKSPACE/zstd-install"
-
-      - name: Verify
-        run: |
-          "$GITHUB_WORKSPACE/zstd-install/bin/zstd" --version
-
-      - name: Set outputs
-        id: set-outputs
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          ASSET_NAME="zstd-${VERSION}-riscv64-linux.tar.gz"
-          ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
-          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
-          echo "asset_path=$ASSET_PATH" >> "$GITHUB_OUTPUT"
-
-      - name: Package
-        run: |
-          tar -czf "${{ steps.set-outputs.outputs.asset_path }}" \
-            -C "$GITHUB_WORKSPACE/zstd-install" .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-outputs.outputs.asset_name }}
-          path: ${{ steps.set-outputs.outputs.asset_path }}
-
-      - name: Trigger Pages update
-        if: success()
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: update-pages
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true
