@@ -122,7 +122,7 @@ jobs:
 
   build-pause-riscv:
     needs: get-versions
-    runs-on: RISCV64
+    runs-on: ubuntu-24.04-riscv
     permissions:
       contents: read
       packages: write
@@ -232,7 +232,7 @@ jobs:
 
   build-flannel-riscv:
     needs: get-versions
-    runs-on: RISCV64
+    runs-on: ubuntu-24.04-riscv
     permissions:
       contents: read
       packages: write
@@ -329,7 +329,7 @@ jobs:
 
   build-flannel-cni-riscv:
     needs: get-versions
-    runs-on: RISCV64
+    runs-on: ubuntu-24.04-riscv
     permissions:
       contents: read
       packages: write
