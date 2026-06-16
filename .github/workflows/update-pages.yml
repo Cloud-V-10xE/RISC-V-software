@@ -389,20 +389,29 @@ jobs:
                 # Installation instructions
                 FIRST_ASSET=$(echo "$RELEASE" | jq -r '.assets[0].name // ""')
                 FIRST_URL=$(echo "$RELEASE"   | jq -r '.assets[0].url  // ""')
-                if [ -n "$FIRST_URL" ]; then
-                  echo "<div class='section-title'>Installation</div>"
-                  echo "<div class='install-block'><code>"
-                  echo "<span class='comment'># Download</span>"
-                  echo "wget ${FIRST_URL}"
-                  if echo "$FIRST_ASSET" | grep -q "\.tar\.gz$"; then
-                    printf '\n<span class="comment"># Extract</span>\n'
-                    echo "tar -xzf ${FIRST_ASSET}"
-                    printf '\n<span class="comment"># Install to /usr/local</span>\n'
-                    echo "sudo cp -r * /usr/local/"
-                  elif echo "$FIRST_ASSET" | grep -q "\.whl$"; then
+                if echo "$FIRST_ASSET" | grep -qi "kubernetes"; then
+                  printf '\n<span class="comment"># The tarball bundles Kubernetes binaries, CNI plugins, and Flannel.</span>\n'
+                  printf '\n<span class="comment"># Extract</span>\n'
+                  echo "tar -xzf ${FIRST_ASSET}"
+                  printf '\n<span class="comment"># Run the bundled installer (installs k8s bins, CNI plugins, and flanneld)</span>\n'
+                  echo "chmod +x install.sh &amp;&amp; sudo ./install.sh"
+                  printf '\n<span class="comment"># What the installer places on disk:</span>\n'
+                  printf '<span class="comment">#   /usr/local/bin/  — kubectl, kubelet, kubeadm, kube-apiserver,</span>\n'
+                  printf '<span class="comment">#                      kube-controller-manager, kube-scheduler, kube-proxy</span>\n'
+                  printf '<span class="comment">#   /opt/cni/bin/    — CNI plugins (bridge, host-local, loopback, ...)</span>\n'
+                  printf '<span class="comment">#   /usr/local/bin/flanneld  — Flannel network daemon</span>\n'
+                  printf '\n<span class="comment"># Verify</span>\n'
+                  echo "kubectl version --client"
+                  echo "kubelet --version"
+                elif echo "$FIRST_ASSET" | grep -q "\.tar\.gz$"; then
+                  printf '\n<span class="comment"># Extract</span>\n'
+                  echo "tar -xzf ${FIRST_ASSET}"
+                  printf '\n<span class="comment"># Install to /usr/local</span>\n'
+                  echo "sudo cp -r * /usr/local/"
+                elif echo "$FIRST_ASSET" | grep -q "\.whl$"; then
                     printf '\n<span class="comment"># Install Python wheel</span>\n'
                     echo "pip install ${FIRST_ASSET}"
-                  else
+                else
                     printf '\n<span class="comment"># Make executable and move to PATH</span>\n'
                     echo "chmod +x ${FIRST_ASSET}"
                     echo "sudo mv ${FIRST_ASSET} /usr/local/bin/"

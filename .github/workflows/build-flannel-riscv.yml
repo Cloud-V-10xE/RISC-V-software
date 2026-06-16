@@ -350,7 +350,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/cni-plugin"
 
           cat > Dockerfile << 'EOF'
-          FROM riscv64/golang:1.24-alpine AS builder
+          FROM riscv64/golang:1.25-alpine AS builder
           WORKDIR /build
           COPY . .
           RUN apk add --no-cache git make && CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -o flannel-riscv64 .

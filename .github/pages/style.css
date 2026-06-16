@@ -149,13 +149,16 @@ h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
   border: 1px solid var(--border);
   margin-bottom: 4px;
 }
-.pkg-card {
-  background: var(--surface);
-  padding: 16px 18px;
-  transition: background 0.1s;
-  display: block;
-  color: inherit;
-  text-decoration: none;
+.pkg-card-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  /* ADD THESE: */
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 .pkg-card:hover { background: var(--card-hover); text-decoration: none; }
 .pkg-card-name { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-bottom: 4px; color: var(--text); }
