@@ -11,6 +11,8 @@ on:
     branches: [main]
     paths:
       - .github/pages/packages.json
+      - .github/pages/style.css
+      - .github/update-pages.yml
 
 jobs:
   build-and-deploy:
