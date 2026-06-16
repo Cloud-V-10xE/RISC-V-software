@@ -256,6 +256,8 @@ tr:hover td { background: var(--row-hover); }
   padding: 14px 16px;
   margin: 8px 0 20px;
   border: 1px solid var(--border);
+  overflow-x: auto;          /* horizontal scroll instead of overflow */
+  white-space: pre;          /* keep formatting */
 }
 .install-block code {
   font-family: var(--mono);
@@ -264,6 +266,9 @@ tr:hover td { background: var(--row-hover); }
   display: block;
   line-height: 1.8;
   white-space: pre;
+  display: block;
+  overflow-x: auto; 
+  word-break: normal;
 }
 .install-block .comment { color: #6a9955; }
 
