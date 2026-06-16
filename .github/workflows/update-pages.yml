@@ -12,7 +12,7 @@ on:
     paths:
       - .github/pages/packages.json
       - .github/pages/style.css
-      - .github/update-pages.yml
+      - .github/workflows/update-pages.yml
 
 jobs:
   build-and-deploy:
