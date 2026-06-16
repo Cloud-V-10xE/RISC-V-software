@@ -397,17 +397,38 @@ jobs:
                   echo "<span class='comment'># Download</span>"
                   echo "wget ${FIRST_URL}"
                   if echo "$FIRST_ASSET" | grep -qi "kubernetes"; then
-                    printf '\n<span class="comment"># The tarball bundles Kubernetes binaries, CNI plugins, and Flannel.</span>\n'
-                    printf '\n<span class="comment"># Extract</span>\n'
+                    printf '\n<span class="comment"># ── Step 1: Download the tarball for your architecture ──</span>\n'
+                    printf '<span class="comment"># For RISC-V:</span>\n'
+                    echo "wget ${FIRST_URL}"
+                    printf '<span class="comment"># For x86_64: download the x86_64 tarball from the Downloads table above</span>\n'
+                    printf '\n<span class="comment"># ── Step 2: Extract and install binaries ──</span>\n'
                     echo "tar -xzf ${FIRST_ASSET}"
-                    printf '\n<span class="comment"># Run the bundled installer (installs k8s bins, CNI plugins, and flanneld)</span>\n'
                     echo "chmod +x install.sh &amp;&amp; sudo ./install.sh"
-                    printf '\n<span class="comment"># What the installer places on disk:</span>\n'
+                    printf '\n<span class="comment"># Installs to:</span>\n'
                     printf '<span class="comment">#   /usr/local/bin/  — kubectl, kubelet, kubeadm, kube-apiserver,</span>\n'
                     printf '<span class="comment">#                      kube-controller-manager, kube-scheduler, kube-proxy</span>\n'
                     printf '<span class="comment">#   /opt/cni/bin/    — CNI plugins (bridge, host-local, loopback, ...)</span>\n'
                     printf '<span class="comment">#   /usr/local/bin/flanneld  — Flannel network daemon</span>\n'
-                    printf '\n<span class="comment"># Verify</span>\n'
+                    printf '\n<span class="comment"># ── Step 3: Pull container images from GHCR (multi-arch: riscv64 + amd64) ──</span>\n'
+                    printf '<span class="comment"># These are required for a working cluster. Docker/containerd must be running.</span>\n'
+                    printf '\n<span class="comment"># Core Kubernetes control plane images:</span>\n'
+                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-apiserver:latest"
+                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-controller-manager:latest"
+                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-scheduler:latest"
+                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-proxy:latest"
+                    printf '\n<span class="comment"># Pause container (sandbox image for pods):</span>\n'
+                    echo "crictl pull ghcr.io/cloud-v-10xe/pause:latest"
+                    printf '\n<span class="comment"># Networking (etcd, CoreDNS, Flannel):</span>\n'
+                    echo "crictl pull ghcr.io/cloud-v-10xe/etcd:latest"
+                    echo "crictl pull ghcr.io/cloud-v-10xe/coredns:latest"
+                    echo "crictl pull ghcr.io/cloud-v-10xe/flannel:latest"
+                    echo "crictl pull ghcr.io/cloud-v-10xe/flannel-cni-plugin:latest"
+                    printf '\n<span class="comment"># ── Step 4: Configure containerd to use our pause image ──</span>\n'
+                    printf '<span class="comment"># Edit /etc/containerd/config.toml and set:</span>\n'
+                    printf '<span class="comment">#   sandbox_image = "ghcr.io/cloud-v-10xe/pause:latest"</span>\n'
+                    echo "sudo sed -i 's|sandbox_image = .*|sandbox_image = \"ghcr.io/cloud-v-10xe/pause:latest\"|' /etc/containerd/config.toml"
+                    echo "sudo systemctl restart containerd"
+                    printf '\n<span class="comment"># ── Step 5: Verify ──</span>\n'
                     echo "kubectl version --client"
                     echo "kubelet --version"
                   elif echo "$FIRST_ASSET" | grep -q "\.tar\.gz$"; then
