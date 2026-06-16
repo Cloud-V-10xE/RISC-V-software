@@ -153,11 +153,11 @@ h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
   font-size: 13px;
   color: var(--text-muted);
   line-height: 1.45;
-  /* ADD THESE: */
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+  line-clamp: 3;             /* ← add this (standard property) */
   word-break: break-word;
 }
 .pkg-card:hover { background: var(--card-hover); text-decoration: none; }
