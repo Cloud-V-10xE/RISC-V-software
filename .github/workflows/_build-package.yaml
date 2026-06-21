@@ -77,7 +77,7 @@ jobs:
     name: Build ${{ inputs.package-name }}
     runs-on: ${{ inputs.runner }}
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Install apt dependencies
