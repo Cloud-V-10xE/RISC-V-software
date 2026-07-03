@@ -23,7 +23,7 @@ jobs:
         git config --global http.maxRequests 2
         git config --global core.compression 0
 
-        CALICO_REPO="https://github.com/your-org/calico.git"
+        CALICO_REPO="https://github.com/projectcalico/calico"
         if [ "$GITHUB_REF_TYPE" = "tag" ]; then
           CALICO_REF="$GITHUB_REF_NAME"
         else
