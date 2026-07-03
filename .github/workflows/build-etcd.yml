@@ -124,7 +124,17 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: '$GITHUB_WORKSPACE/etcd/go.mod' # Automatically uses the version etcd requires!
+          # Check the cloned go.mod first; fallback to standard 1.24 if it fails
+          go-version-file: '$GITHUB_WORKSPACE/etcd/go.mod'
+        continue-on-error: true
+
+      # Fallback step: If setup-go failed or couldn't parse it on RISC-V, use native apt-get
+      - name: Setup Go Fallback (Apt)
+        run: |
+          if ! command -v go &> /dev/null; then
+            echo "Official setup-go action bypassed or failed on RISC-V. Falling back to apt install..."
+            sudo apt update && sudo apt install -y golang
+          fi
       - name: Build and push etcd for RISC-V
         run: |
           cd "$GITHUB_WORKSPACE/etcd"
