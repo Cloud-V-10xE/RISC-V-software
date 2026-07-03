@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: Calico RISC-V
-      runner: RISCV64
+      # runner: RISCV64
       apt-packages: >-
         build-essential golang clang llvm libbpf-dev libnftnl-dev
         iptables-dev pkg-config
