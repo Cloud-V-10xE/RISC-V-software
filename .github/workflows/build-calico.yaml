@@ -16,7 +16,7 @@ jobs:
       # runner: RISCV64
       apt-packages: >-
         build-essential golang clang llvm libbpf-dev libnftnl-dev
-        iptables libxtables-dev libiptc-de pkg-config
+        iptables libxtables-dev libiptc-dev pkg-config
       build-script: |
         set -eux
         git config --global http.postBuffer 524288000
