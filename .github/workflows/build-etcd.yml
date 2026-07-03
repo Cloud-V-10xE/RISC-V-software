@@ -109,10 +109,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-        
-      - name: Setup Go
-        run: |
-          sudo apt update && sudo apt install -y golang
 
       - name: Clean workspace with elevated permissions
         run: |
@@ -125,7 +121,10 @@ jobs:
             --branch "${{ needs.get-versions.outputs.etcd_version }}" \
             https://github.com/etcd-io/etcd.git \
             "$GITHUB_WORKSPACE/etcd"
-
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: '$GITHUB_WORKSPACE/etcd/go.mod' # Automatically uses the version etcd requires!
       - name: Build and push etcd for RISC-V
         run: |
           cd "$GITHUB_WORKSPACE/etcd"
