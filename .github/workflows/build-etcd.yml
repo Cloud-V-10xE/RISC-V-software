@@ -153,48 +153,36 @@ jobs:
 
           cd /tmp/etcd-build
           docker build \
-            --tag "$${{ secrets.DOCKERHUB_USERNAME }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64" \
-            --tag "$${{ secrets.DOCKERHUB_USERNAME }}/etcd:latest-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/etcd:latest-riscv64" \
             .
 
-          docker push "$${{ secrets.DOCKERHUB_USERNAME }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
-          docker push "$${{ secrets.DOCKERHUB_USERNAME }}/etcd:latest-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/etcd:latest-riscv64"
 
   create-manifests:
     needs: [get-versions, build-etcd-x86, build-etcd-riscv]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
-      - name: Log in to GHCR
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create etcd multi-arch manifest
         run: |
-          docker manifest rm \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}" \
-            2>/dev/null || true
-          docker manifest rm \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest" \
-            2>/dev/null || true
+          # Define standard repository name from secret
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/etcd"
+          TAG="${{ needs.get-versions.outputs.etcd_tag }}"
 
-          docker manifest create \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}" \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-amd64" \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}-riscv64"
+          docker manifest rm "${REPO}:${TAG}" 2>/dev/null || true
+          docker manifest rm "${REPO}:latest" 2>/dev/null || true
 
-          docker manifest push \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:${{ needs.get-versions.outputs.etcd_tag }}"
+          # Create and push versioned multi-arch manifest
+          docker manifest create "${REPO}:${TAG}" "${REPO}:${TAG}-amd64" "${REPO}:${TAG}-riscv64"
+          docker manifest push "${REPO}:${TAG}"
 
-          docker manifest create \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest" \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-amd64" \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest-riscv64"
-
-          docker manifest push \
-            "${{ needs.get-versions.outputs.image_repo }}/etcd:latest"
+          # Create and push latest multi-arch manifest
+          docker manifest create "${REPO}:latest" "${REPO}:latest-amd64" "${REPO}:latest-riscv64"
+          docker manifest push "${REPO}:latest"
