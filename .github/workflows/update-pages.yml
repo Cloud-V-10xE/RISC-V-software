@@ -71,6 +71,9 @@ jobs:
           declare -A PKG_DESC
           declare -A PKG_WORKFLOW
           declare -a ALL_PKGS
+          declare -A PKG_INSTALL_TYPE
+          declare -A PKG_DOCKER_IMAGE
+          declare -A PKG_DOCKER_TAG
 
           while IFS= read -r line; do
             ID=$(echo "$line"       | jq -r '.id')
@@ -78,10 +81,16 @@ jobs:
             CAT=$(echo "$line"      | jq -r '.category')
             DESC=$(echo "$line"     | jq -r '.description')
             WF=$(echo "$line"       | jq -r '.workflow // ""')
+            INSTALL_TYPE=$(echo "$line" | jq -r '.install_type // "tarball"')
+            DOCKER_IMAGE=$(echo "$line" | jq -r '.docker_image // ""')
+            DOCKER_TAG=$(echo "$line" | jq -r '.docker_tag // "latest"')
             PKG_LABEL["$ID"]="$LABEL"
             PKG_CATEGORY["$ID"]="$CAT"
             PKG_DESC["$ID"]="$DESC"
             PKG_WORKFLOW["$ID"]="$WF"
+            PKG_INSTALL_TYPE["$ID"]="$INSTALL_TYPE"
+            PKG_DOCKER_IMAGE["$ID"]="$DOCKER_IMAGE"
+            PKG_DOCKER_TAG["$ID"]="$DOCKER_TAG"
             ALL_PKGS+=("$ID")
           done < <(jq -c '.packages[]' "$PKGS_JSON")
 
@@ -275,14 +284,29 @@ jobs:
             <p class="page-desc">${DESC}</p>
           HTML
 
+              DOC_FILE=""
+              if [ -f "docs/packages/${PKG}.md" ]; then
+                DOC_FILE="docs/packages/${PKG}.md"
+              elif [ -f "docs/${PKG}/README.md" ]; then
+                DOC_FILE="docs/${PKG}/README.md"
+              fi
+
               # About block from docs/
-              if [ -f "docs/${PKG}/README.md" ]; then
+              if [ -n "$DOC_FILE" ]; then
                 echo "<div class='section-title'>About</div>"
                 echo "<div class='doc-block'>"
-                grep -v '^#' "docs/${PKG}/README.md" | sed '/^$/d' | head -5 | while read -r LINE; do
+                grep -v '^#' "$DOC_FILE" | sed '/^$/d' | head -5 | while read -r LINE; do
                   echo "<p>${LINE}</p>"
                 done
                 echo "</div>"
+              fi
+
+              if [ "${PKG_INSTALL_TYPE[$PKG]}" = "docker" ]; then
+                echo "<div class='section-title'>Installation</div>"
+                echo "<div class='install-block'><code>"
+                echo "<span class='comment'># Pull container image</span>"
+                echo "docker pull ${PKG_DOCKER_IMAGE[$PKG]}:${PKG_DOCKER_TAG[$PKG]}"
+                echo "</code></div>"
               fi
 
               # Releases table
@@ -391,58 +415,63 @@ jobs:
                 # Installation instructions
                 FIRST_ASSET=$(echo "$RELEASE" | jq -r '.assets[0].name // ""')
                 FIRST_URL=$(echo "$RELEASE"   | jq -r '.assets[0].url  // ""')
-                if [ -n "$FIRST_URL" ]; then
+                if [ "${PKG_INSTALL_TYPE[$PKG]}" = "docker" ] || [ -n "$FIRST_URL" ]; then
                   echo "<div class='section-title'>Installation</div>"
                   echo "<div class='install-block'><code>"
-                  echo "<span class='comment'># Download</span>"
-                  echo "wget ${FIRST_URL}"
-                  if echo "$FIRST_ASSET" | grep -qi "kubernetes"; then
-                    printf '\n<span class="comment"># ── Step 1: Download the tarball for your architecture ──</span>\n'
-                    printf '<span class="comment"># For RISC-V:</span>\n'
-                    echo "wget ${FIRST_URL}"
-                    printf '<span class="comment"># For x86_64: download the x86_64 tarball from the Downloads table above</span>\n'
-                    printf '\n<span class="comment"># ── Step 2: Extract and install binaries ──</span>\n'
-                    echo "tar -xzf ${FIRST_ASSET}"
-                    echo "chmod +x install.sh &amp;&amp; sudo ./install.sh"
-                    printf '\n<span class="comment"># Installs to:</span>\n'
-                    printf '<span class="comment">#   /usr/local/bin/  — kubectl, kubelet, kubeadm, kube-apiserver,</span>\n'
-                    printf '<span class="comment">#                      kube-controller-manager, kube-scheduler, kube-proxy</span>\n'
-                    printf '<span class="comment">#   /opt/cni/bin/    — CNI plugins (bridge, host-local, loopback, ...)</span>\n'
-                    printf '<span class="comment">#   /usr/local/bin/flanneld  — Flannel network daemon</span>\n'
-                    printf '\n<span class="comment"># ── Step 3: Pull container images from GHCR (multi-arch: riscv64 + amd64) ──</span>\n'
-                    printf '<span class="comment"># These are required for a working cluster. Docker/containerd must be running.</span>\n'
-                    printf '\n<span class="comment"># Core Kubernetes control plane images:</span>\n'
-                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-apiserver:latest"
-                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-controller-manager:latest"
-                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-scheduler:latest"
-                    echo "crictl pull ghcr.io/cloud-v-10xe/kube-proxy:latest"
-                    printf '\n<span class="comment"># Pause container (sandbox image for pods):</span>\n'
-                    echo "crictl pull ghcr.io/cloud-v-10xe/pause:latest"
-                    printf '\n<span class="comment"># Networking (etcd, CoreDNS, Flannel):</span>\n'
-                    echo "crictl pull ghcr.io/cloud-v-10xe/etcd:latest"
-                    echo "crictl pull ghcr.io/cloud-v-10xe/coredns:latest"
-                    echo "crictl pull ghcr.io/cloud-v-10xe/flannel:latest"
-                    echo "crictl pull ghcr.io/cloud-v-10xe/flannel-cni-plugin:latest"
-                    printf '\n<span class="comment"># ── Step 4: Configure containerd to use our pause image ──</span>\n'
-                    printf '<span class="comment"># Edit /etc/containerd/config.toml and set:</span>\n'
-                    printf '<span class="comment">#   sandbox_image = "ghcr.io/cloud-v-10xe/pause:latest"</span>\n'
-                    echo "sudo sed -i 's|sandbox_image = .*|sandbox_image = \"ghcr.io/cloud-v-10xe/pause:latest\"|' /etc/containerd/config.toml"
-                    echo "sudo systemctl restart containerd"
-                    printf '\n<span class="comment"># ── Step 5: Verify ──</span>\n'
-                    echo "kubectl version --client"
-                    echo "kubelet --version"
-                  elif echo "$FIRST_ASSET" | grep -q "\.tar\.gz$"; then
-                    printf '\n<span class="comment"># Extract</span>\n'
-                    echo "tar -xzf ${FIRST_ASSET}"
-                    printf '\n<span class="comment"># Install to /usr/local</span>\n'
-                    echo "sudo cp -r * /usr/local/"
-                  elif echo "$FIRST_ASSET" | grep -q "\.whl$"; then
-                    printf '\n<span class="comment"># Install Python wheel</span>\n'
-                    echo "pip install ${FIRST_ASSET}"
+                  if [ "${PKG_INSTALL_TYPE[$PKG]}" = "docker" ]; then
+                    echo "<span class='comment'># Pull container image</span>"
+                    echo "docker pull ${PKG_DOCKER_IMAGE[$PKG]}:${PKG_DOCKER_TAG[$PKG]}"
                   else
-                    printf '\n<span class="comment"># Make executable and move to PATH</span>\n'
-                    echo "chmod +x ${FIRST_ASSET}"
-                    echo "sudo mv ${FIRST_ASSET} /usr/local/bin/"
+                    echo "<span class='comment'># Download</span>"
+                    echo "wget ${FIRST_URL}"
+                    if echo "$FIRST_ASSET" | grep -qi "kubernetes"; then
+                      printf '\n<span class="comment"># ── Step 1: Download the tarball for your architecture ──</span>\n'
+                      printf '<span class="comment"># For RISC-V:</span>\n'
+                      echo "wget ${FIRST_URL}"
+                      printf '<span class="comment"># For x86_64: download the x86_64 tarball from the Downloads table above</span>\n'
+                      printf '\n<span class="comment"># ── Step 2: Extract and install binaries ──</span>\n'
+                      echo "tar -xzf ${FIRST_ASSET}"
+                      echo "chmod +x install.sh &amp;&amp; sudo ./install.sh"
+                      printf '\n<span class="comment"># Installs to:</span>\n'
+                      printf '<span class="comment">#   /usr/local/bin/  — kubectl, kubelet, kubeadm, kube-apiserver,</span>\n'
+                      printf '<span class="comment">#                      kube-controller-manager, kube-scheduler, kube-proxy</span>\n'
+                      printf '<span class="comment">#   /opt/cni/bin/    — CNI plugins (bridge, host-local, loopback, ...)</span>\n'
+                      printf '<span class="comment">#   /usr/local/bin/flanneld  — Flannel network daemon</span>\n'
+                      printf '\n<span class="comment"># ── Step 3: Pull container images from GHCR (multi-arch: riscv64 + amd64) ──</span>\n'
+                      printf '<span class="comment"># These are required for a working cluster. Docker/containerd must be running.</span>\n'
+                      printf '\n<span class="comment"># Core Kubernetes control plane images:</span>\n'
+                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-apiserver:latest"
+                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-controller-manager:latest"
+                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-scheduler:latest"
+                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-proxy:latest"
+                      printf '\n<span class="comment"># Pause container (sandbox image for pods):</span>\n'
+                      echo "crictl pull ghcr.io/cloud-v-10xe/pause:latest"
+                      printf '\n<span class="comment"># Networking (etcd, CoreDNS, Flannel):</span>\n'
+                      echo "crictl pull ghcr.io/cloud-v-10xe/etcd:latest"
+                      echo "crictl pull ghcr.io/cloud-v-10xe/coredns:latest"
+                      echo "crictl pull ghcr.io/cloud-v-10xe/flannel:latest"
+                      echo "crictl pull ghcr.io/cloud-v-10xe/flannel-cni-plugin:latest"
+                      printf '\n<span class="comment"># ── Step 4: Configure containerd to use our pause image ──</span>\n'
+                      printf '<span class="comment"># Edit /etc/containerd/config.toml and set:</span>\n'
+                      printf '<span class="comment">#   sandbox_image = "ghcr.io/cloud-v-10xe/pause:latest"</span>\n'
+                      echo "sudo sed -i 's|sandbox_image = .*|sandbox_image = \"ghcr.io/cloud-v-10xe/pause:latest\"|' /etc/containerd/config.toml"
+                      echo "sudo systemctl restart containerd"
+                      printf '\n<span class="comment"># ── Step 5: Verify ──</span>\n'
+                      echo "kubectl version --client"
+                      echo "kubelet --version"
+                    elif echo "$FIRST_ASSET" | grep -q "\.tar\.gz$"; then
+                      printf '\n<span class="comment"># Extract</span>\n'
+                      echo "tar -xzf ${FIRST_ASSET}"
+                      printf '\n<span class="comment"># Install to /usr/local</span>\n'
+                      echo "sudo cp -r * /usr/local/"
+                    elif echo "$FIRST_ASSET" | grep -q "\.whl$"; then
+                      printf '\n<span class="comment"># Install Python wheel</span>\n'
+                      echo "pip install ${FIRST_ASSET}"
+                    else
+                      printf '\n<span class="comment"># Make executable and move to PATH</span>\n'
+                      echo "chmod +x ${FIRST_ASSET}"
+                      echo "sudo mv ${FIRST_ASSET} /usr/local/bin/"
+                    fi
                   fi
                   echo "</code></div>"
                 fi

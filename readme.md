@@ -9,11 +9,11 @@
 [![Packages](https://img.shields.io/badge/packages-20+-blue?style=flat-square)](#-packages)
 [![Architecture](https://img.shields.io/badge/arch-riscv64-orange?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![GitHub Pages](https://img.shields.io/badge/site-live-brightgreen?style=flat-square)](https://cloud-v-10xe.github.io/RISC-V-softwares/)
+[![GitHub Pages](https://img.shields.io/badge/site-live-brightgreen?style=flat-square)](https://cloud-v-10xe.github.io/RISC-V-software/)
 
 ---
 
-[**📦 Browse Packages**](https://cloud-v-10xe.github.io/RISC-V-softwares/) · [**📖 Docs**](docs/) · [**🤝 Contribute**](CONTRIBUTING.md)
+[**📦 Browse Packages**](https://cloud-v-10xe.github.io/RISC-V-software/) · [**📖 Docs**](docs/) · [**🤝 Contribute**](CONTRIBUTING.md)
 
 </div>
 
@@ -35,7 +35,7 @@ Visit the [package archive](https://cloud-v-10xe.github.io/RISC-V-software/) and
 
 ```bash
 # Example: install the latest GCC
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/download/<tag>/gcc-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/download/<tag>/gcc-<version>-riscv64-linux.tar.gz
 tar -xzf gcc-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

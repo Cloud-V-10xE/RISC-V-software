@@ -102,7 +102,10 @@
       "category": "Infrastructure",
       "description": "Network fabric for containers — Docker images only",
       "central_release": false,
-      "workflow": "build-flannel-riscv.yml"
+      "workflow": "build-flannel-riscv.yml",
+      "install_type": "docker",
+      "docker_image": "ghcr.io/cloud-v-10xe/flannel",
+      "docker_tag": "latest"
     },
     {
       "id": "etcd",
@@ -110,7 +113,10 @@
       "category": "Infrastructure",
       "description": "Distributed key-value store for Kubernetes",
       "central_release": false,
-      "workflow": "build-etcd.yml"
+      "workflow": "build-etcd.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/etcd",
+      "docker_tag": "latest"
     },
     {
       "id": "cmake",
