@@ -37,28 +37,22 @@ jobs:
         CALICO_VERSION="$(git describe --tags --always)"
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
 
-        # Pure-Go components — build the actual main packages explicitly
-        for d in calicoctl cni-plugin kube-controllers typha apiserver; do
-          case "$d" in
-            calicoctl)
-              target="./calicoctl/cmd/calicoctl"
-              ;;
-            cni-plugin)
-              target="./cni-plugin/cmd/calico"
-              ;;
-            kube-controllers)
-              target="./kube-controllers/cmd/kube-controllers"
-              ;;
-            typha)
-              target="./typha/cmd/typha"
-              ;;
-            apiserver)
-              target="./apiserver/cmd/apiserver"
-              ;;
-          esac
+        build_binary() {
+          local output_name="$1"
+          local target="$2"
+          if [ -d "$target" ] || [ -f "$target" ]; then
+            GOOS=linux GOARCH=riscv64 CGO_ENABLED=1 go build -o "$GITHUB_WORKSPACE/installed_binaries/$output_name" "$target"
+          else
+            echo "Skipping $output_name: source path '$target' not found" >&2
+          fi
+        }
 
-          GOOS=linux GOARCH=riscv64 CGO_ENABLED=1 go build -o "$GITHUB_WORKSPACE/installed_binaries/$d" "$target"
-        done
+        # Pure-Go components — build the actual main packages explicitly when present
+        build_binary calicoctl ./cmd/calico
+        build_binary cni-plugin ./cni-plugin/cmd/calico
+        build_binary kube-controllers ./kube-controllers/cmd/kube-controllers
+        build_binary typha ./typha/cmd/typha
+        build_binary apiserver ./apiserver/cmd/apiserver
 
         # Felix — cgo + eBPF, compiled natively since the runner *is* riscv64
         make -C felix build ARCH=riscv64
