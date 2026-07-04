@@ -77,7 +77,8 @@ jobs:
     name: Build ${{ inputs.package-name }}
     runs-on: ${{ inputs.runner }}
     permissions:
-      contents: read
+      contents: write
+      actions: write
 
     steps:
       - name: Install apt dependencies
@@ -118,3 +119,4 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           event-type: update-pages
+          repository: ${{ github.repository }}

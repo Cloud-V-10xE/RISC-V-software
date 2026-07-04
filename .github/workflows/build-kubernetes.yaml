@@ -164,6 +164,9 @@ jobs:
 
   build-riscv:
     needs: get-versions
+    permissions:
+      contents: write
+      actions: write
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: Kubernetes RISC-V
