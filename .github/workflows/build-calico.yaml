@@ -37,14 +37,37 @@ jobs:
         CALICO_VERSION="$(git describe --tags --always)"
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
 
-        # Pure-Go components — native GOARCH=riscv64 build
+        # Pure-Go components — build the actual main packages explicitly
         for d in calicoctl cni-plugin kube-controllers typha apiserver; do
-          GOARCH=riscv64 go build -o "$GITHUB_WORKSPACE/installed_binaries/$d" "./$d/cmd/..."
+          case "$d" in
+            calicoctl)
+              target="./calicoctl/cmd/calicoctl"
+              ;;
+            cni-plugin)
+              target="./cni-plugin/cmd/calico"
+              ;;
+            kube-controllers)
+              target="./kube-controllers/cmd/kube-controllers"
+              ;;
+            typha)
+              target="./typha/cmd/typha"
+              ;;
+            apiserver)
+              target="./apiserver/cmd/apiserver"
+              ;;
+          esac
+
+          GOOS=linux GOARCH=riscv64 CGO_ENABLED=1 go build -o "$GITHUB_WORKSPACE/installed_binaries/$d" "$target"
         done
 
         # Felix — cgo + eBPF, compiled natively since the runner *is* riscv64
         make -C felix build ARCH=riscv64
-        cp felix/bin/felix-riscv64 "$GITHUB_WORKSPACE/installed_binaries/felix"
+        FELIX_BIN="$(find "$GITHUB_WORKSPACE/calico/felix/bin" -maxdepth 1 -type f -name 'felix*' | head -n 1)"
+        if [ -z "$FELIX_BIN" ]; then
+          echo "Felix binary was not produced under felix/bin" >&2
+          exit 1
+        fi
+        cp "$FELIX_BIN" "$GITHUB_WORKSPACE/installed_binaries/felix"
 
         "$GITHUB_WORKSPACE/installed_binaries/calicoctl" version || true
 
