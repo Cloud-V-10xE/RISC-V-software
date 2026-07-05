@@ -97,17 +97,6 @@
       "workflow": "build-kubernetes.yaml"
     },
     {
-      "id": "flannel",
-      "label": "Flannel",
-      "category": "Infrastructure",
-      "description": "Network fabric for containers — Docker images only",
-      "central_release": false,
-      "workflow": "build-flannel-riscv.yml",
-      "install_type": "docker",
-      "docker_image": "ghcr.io/cloud-v-10xe/flannel",
-      "docker_tag": "latest"
-    },
-    {
       "id": "etcd",
       "label": "etcd",
       "category": "Infrastructure",
