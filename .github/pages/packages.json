@@ -73,14 +73,6 @@
       "workflow": "build-onnx.yml"
     },
     {
-      "id": "tensorflow",
-      "label": "TensorFlow",
-      "category": "ML Frameworks",
-      "description": "Machine learning platform by Google",
-      "central_release": true,
-      "workflow": "build-tensorflow.yml"
-    },
-    {
       "id": "bazelisk",
       "label": "Bazelisk",
       "category": "Build Tools",
