@@ -86,13 +86,23 @@ jobs:
               continue
             fi
 
+            DOWNLOAD_FAILED=false
             for ART in $ARTIFACTS; do
               echo "  ⬇️  Downloading: $ART"
-              gh run download "$LATEST_RUN_ID" \
+              if ! gh run download "$LATEST_RUN_ID" \
                 --repo "$GH_REPO" \
                 --name "$ART" \
-                -D release_assets
+                -D release_assets; then
+                echo "⚠️  Failed to download artifact '$ART' for $WF, skipping"
+                DOWNLOAD_FAILED=true
+                break
+              fi
             done
+
+            if [ "$DOWNLOAD_FAILED" = true ]; then
+              FAILED_WORKFLOWS+=("$WF")
+              continue
+            fi
 
           done < /tmp/cr_workflows.txt
 

@@ -38,7 +38,7 @@
       "category": "Runtimes",
       "description": "JavaScript runtime built on V8",
       "central_release": true,
-      "workflow": "build-nodejs.yml"
+      "workflow": "build-node.yml"
     },
     {
       "id": "openjdk",
@@ -123,8 +123,8 @@
       "label": "CMake",
       "category": "Build Tools",
       "description": "Cross-platform build system generator",
+      "central_release": true,
       "workflow": "build-cmake.yml"
-
     },
     {
       "id": "golang",
