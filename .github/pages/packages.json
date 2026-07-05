@@ -126,19 +126,11 @@
       "central_release": true,
       "workflow": "build-cmake.yml"
     },
-    {
-      "id": "golang",
-      "label": "Go",
-      "category": "Runtimes",
-      "description": "Go programming language runtime and toolchain — official releases do not include riscv64 binaries",
-      "central_release": true,
-      "workflow": "build-go.yml"
-    },
     { 
       "id": "ninja",
       "label": "Ninja",
       "category": "Build Tools",
-      "description": "Small fast build system used by LLVM, CMake and Chrome — no prebuilt riscv64 binary",
+      "description": "Small fast build system used by LLVM, CMake and Chrome",
       "central_release": true, "workflow": "build-ninja.yml"  
     },
     { "id": "sqlite",
