@@ -45,18 +45,26 @@ jobs:
           local output_name="$1"
           local target="$2"
           if [ -d "$target" ] || [ -f "$target" ]; then
-            GOOS=linux GOARCH=riscv64 CGO_ENABLED=1 go build -o "$GITHUB_WORKSPACE/installed_binaries/$output_name" "$target"
+            GOOS=linux GOARCH=riscv64 CGO_ENABLED=0 go build -o "$GITHUB_WORKSPACE/installed_binaries/$output_name" "$target"
           else
             echo "Skipping $output_name: source path '$target' not found" >&2
           fi
         }
 
-        # Pure-Go components — build the actual main packages explicitly when present
+        # Pure-Go components — build the actual main packages explicitly when present.
+        # CGO must stay disabled: cmd/calico transitively imports felix/bpf/libbpf, a
+        # cgo binding to a vendored libbpf submodule that isn't fetched by our shallow,
+        # non-submodule clone and that upstream only links for amd64/arm64/ppc64le/s390x
+        # (no riscv64 support) — CGO_ENABLED=0 keeps that path out of the build.
         build_binary calicoctl ./cmd/calico
         build_binary cni-plugin ./cni-plugin/cmd/calico
         build_binary kube-controllers ./kube-controllers/cmd/kube-controllers
         build_binary typha ./typha/cmd/typha
-        build_binary apiserver ./apiserver/cmd/apiserver
+
+        # apiserver is no longer a standalone main package upstream — its server
+        # logic (apiserver/cmd/apiserver/server) is now built directly into
+        # cmd/calico (see cmd/calico/apiserver.go), so it's already part of the
+        # calicoctl binary above.
 
         # Felix is currently skipped because its BPF build path requires extra
         # native libbpf support that is not available in this runner environment.
