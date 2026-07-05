@@ -89,6 +89,14 @@
       "workflow": "build-kubernetes.yaml"
     },
     {
+      "id": "calico",
+      "label": "Calico",
+      "category": "Infrastructure",
+      "description": "Container networking and network policy for Kubernetes",
+      "central_release": true,
+      "workflow": "build-calico.yaml"
+    },
+    {
       "id": "etcd",
       "label": "etcd",
       "category": "Infrastructure",
