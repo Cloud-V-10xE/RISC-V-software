@@ -45,7 +45,7 @@ All Docker images are multi-arch (amd64 + riscv64):
 
 ```bash
 # Pull a Kubernetes component image
-docker pull ghcr.io/cloud-v-10xe/kube-apiserver:latest
+docker pull cloudv10x/kube-apiserver:latest
 ```
 
 ---

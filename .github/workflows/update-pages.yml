@@ -436,18 +436,18 @@ jobs:
                       printf '<span class="comment">#   /usr/local/bin/  — kubectl, kubelet, kubeadm, kube-apiserver,</span>\n'
                       printf '<span class="comment">#                      kube-controller-manager, kube-scheduler, kube-proxy</span>\n'
                       printf '<span class="comment">#   /opt/cni/bin/    — CNI plugins (bridge, host-local, loopback, ...)</span>\n'
-                      printf '\n<span class="comment"># ── Step 3: Pull container images from GHCR (multi-arch: riscv64 + amd64) ──</span>\n'
+                      printf '\n<span class="comment"># ── Step 3: Pull container images from Docker Hub (multi-arch: riscv64 + amd64) ──</span>\n'
                       printf '<span class="comment"># These are required for a working cluster. Docker/containerd must be running.</span>\n'
                       printf '\n<span class="comment"># Core Kubernetes control plane images:</span>\n'
-                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-apiserver:latest"
-                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-controller-manager:latest"
-                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-scheduler:latest"
-                      echo "crictl pull ghcr.io/cloud-v-10xe/kube-proxy:latest"
+                      echo "crictl pull docker.io/cloudv10x/kube-apiserver:latest"
+                      echo "crictl pull docker.io/cloudv10x/kube-controller-manager:latest"
+                      echo "crictl pull docker.io/cloudv10x/kube-scheduler:latest"
+                      echo "crictl pull docker.io/cloudv10x/kube-proxy:latest"
                       printf '\n<span class="comment"># Pause container (sandbox image for pods):</span>\n'
                       echo "crictl pull ghcr.io/cloud-v-10xe/pause:latest"
                       printf '\n<span class="comment"># Networking (etcd, CoreDNS):</span>\n'
-                      echo "crictl pull ghcr.io/cloud-v-10xe/etcd:latest"
-                      echo "crictl pull ghcr.io/cloud-v-10xe/coredns:latest"
+                      echo "crictl pull docker.io/cloudv10x/etcd:latest"
+                      echo "crictl pull docker.io/cloudv10x/coredns:latest"
                       printf '\n<span class="comment"># ── Step 4: Configure containerd to use our pause image ──</span>\n'
                       printf '<span class="comment"># Edit /etc/containerd/config.toml and set:</span>\n'
                       printf '<span class="comment">#   sandbox_image = "ghcr.io/cloud-v-10xe/pause:latest"</span>\n'
