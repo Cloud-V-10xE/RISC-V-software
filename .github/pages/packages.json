@@ -97,6 +97,61 @@
       "workflow": "build-calico.yaml"
     },
     {
+      "id": "coredns",
+      "label": "CoreDNS",
+      "category": "Infrastructure",
+      "description": "DNS server for Kubernetes service discovery",
+      "central_release": false,
+      "workflow": "build-coredns.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/coredns",
+      "docker_tag": "latest"
+    },
+    {
+      "id": "kube-apiserver",
+      "label": "kube-apiserver",
+      "category": "Infrastructure",
+      "description": "Kubernetes API server — the cluster's front-end control plane component",
+      "central_release": false,
+      "workflow": "build-k8s-components.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/kube-apiserver",
+      "docker_tag": "latest"
+    },
+    {
+      "id": "kube-controller-manager",
+      "label": "kube-controller-manager",
+      "category": "Infrastructure",
+      "description": "Kubernetes controller manager — runs the cluster's core control loops",
+      "central_release": false,
+      "workflow": "build-k8s-components.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/kube-controller-manager",
+      "docker_tag": "latest"
+    },
+    {
+      "id": "kube-scheduler",
+      "label": "kube-scheduler",
+      "category": "Infrastructure",
+      "description": "Kubernetes scheduler — assigns pods to nodes",
+      "central_release": false,
+      "workflow": "build-k8s-components.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/kube-scheduler",
+      "docker_tag": "latest"
+    },
+    {
+      "id": "kube-proxy",
+      "label": "kube-proxy",
+      "category": "Infrastructure",
+      "description": "Kubernetes network proxy — maintains network rules on nodes",
+      "central_release": false,
+      "workflow": "build-k8s-components.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/kube-proxy",
+      "docker_tag": "latest"
+    },
+    {
       "id": "etcd",
       "label": "etcd",
       "category": "Infrastructure",
