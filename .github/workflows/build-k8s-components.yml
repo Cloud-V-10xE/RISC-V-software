@@ -16,7 +16,6 @@ jobs:
     outputs:
       k8s_version: ${{ steps.versions.outputs.k8s_version }}
       k8s_tag: ${{ steps.versions.outputs.k8s_tag }}
-      image_repo: ${{ steps.versions.outputs.image_repo }}
     steps:
       - name: Get latest versions
         id: versions
@@ -34,11 +33,8 @@ jobs:
 
           K8S_TAG="${K8S_VERSION#v}"
 
-          IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}"
-
           echo "k8s_version=$K8S_VERSION" >> "$GITHUB_OUTPUT"
           echo "k8s_tag=$K8S_TAG" >> "$GITHUB_OUTPUT"
-          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
 
           echo "Building Kubernetes components: $K8S_VERSION"
 
@@ -102,12 +98,12 @@ jobs:
 
           cd /tmp/${{ matrix.component }}-build
           docker build \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-amd64" \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest-amd64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-amd64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest-amd64" \
             .
 
-          docker push "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-amd64"
-          docker push "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest-amd64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-amd64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest-amd64"
 
   build-components-riscv:
     needs: get-versions
@@ -175,12 +171,12 @@ jobs:
 
           cd /tmp/${{ matrix.component }}-build
           docker build \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-riscv64" \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest-riscv64" \
             .
 
-          docker push "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-riscv64"
-          docker push "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest-riscv64"
 
   create-manifests:
     needs: [get-versions, build-components-x86, build-components-riscv]
@@ -201,24 +197,24 @@ jobs:
       - name: Create ${{ matrix.component }} multi-arch manifest
         run: |
           docker manifest rm \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}" \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}" \
             2>/dev/null || true
           docker manifest rm \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest" \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest" \
             2>/dev/null || true
 
           docker manifest create \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}" \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-amd64" \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-riscv64"
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}" \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-amd64" \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}-riscv64"
 
           docker manifest push \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}"
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:${{ needs.get-versions.outputs.k8s_tag }}"
 
           docker manifest create \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest" \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest-amd64" \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest-riscv64"
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest" \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest-amd64" \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest-riscv64"
 
           docker manifest push \
-            "${{ needs.get-versions.outputs.image_repo }}/${{ matrix.component }}:latest"
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component }}:latest"

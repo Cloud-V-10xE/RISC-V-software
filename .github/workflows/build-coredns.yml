@@ -16,7 +16,6 @@ jobs:
     outputs:
       coredns_version: ${{ steps.versions.outputs.coredns_version }}
       coredns_tag: ${{ steps.versions.outputs.coredns_tag }}
-      image_repo: ${{ steps.versions.outputs.image_repo }}
     steps:
       - name: Get latest versions
         id: versions
@@ -29,11 +28,8 @@ jobs:
 
           COREDNS_TAG="${COREDNS_VERSION#v}"
 
-          IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}"
-
           echo "coredns_version=$COREDNS_VERSION" >> "$GITHUB_OUTPUT"
           echo "coredns_tag=$COREDNS_TAG" >> "$GITHUB_OUTPUT"
-          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
 
           echo "Building CoreDNS: $COREDNS_VERSION"
 
@@ -81,12 +77,12 @@ jobs:
 
           cd /tmp/coredns-build
           docker build \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64" \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-amd64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/coredns:latest-amd64" \
             .
 
-          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64"
-          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-amd64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-amd64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/coredns:latest-amd64"
 
   build-coredns-riscv:
     needs: get-versions
@@ -139,12 +135,12 @@ jobs:
 
           cd /tmp/coredns-build
           docker build \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64" \
-            --tag "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/coredns:latest-riscv64" \
             .
 
-          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64"
-          docker push "${{ needs.get-versions.outputs.image_repo }}/coredns:latest-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/coredns:${{ needs.get-versions.outputs.coredns_tag }}-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/coredns:latest-riscv64"
 
   create-manifests:
     needs: [get-versions, build-coredns-x86, build-coredns-riscv]
@@ -161,7 +157,7 @@ jobs:
 
       - name: Create CoreDNS multi-arch manifest
         run: |
-          IMAGE_REPO="${{ needs.get-versions.outputs.image_repo }}"
+          IMAGE_REPO="${{ secrets.DOCKERHUB_USERNAME }}"
           COREDNS_TAG="${{ needs.get-versions.outputs.coredns_tag }}"
 
           docker manifest rm "${IMAGE_REPO}/coredns:${COREDNS_TAG}" 2>/dev/null || true
