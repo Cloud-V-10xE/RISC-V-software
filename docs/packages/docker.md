@@ -6,7 +6,9 @@ Docker Engine — the `dockerd` daemon, the `docker` CLI, and `docker-proxy`.
 
 `download.docker.com` has **no riscv64 directory at all**. The static-binary tree carries aarch64, armel, armhf, ppc64le, s390x and x86_64; the apt repo for noble is amd64/arm64/armhf/ppc64el/s390x. `moby/moby`'s GitHub releases carry zero assets.
 
-Ubuntu 24.04 riscv64 is stuck on `docker.io` **24.0.7** against upstream 29.x, and ships no `docker-compose-plugin` or `docker-buildx-plugin` for riscv64 at all.
+Ubuntu's `noble` release pocket carries `docker.io` **24.0.7** for riscv64, against upstream 29.x.
+
+`noble-updates` has since caught up: it carries riscv64 `docker.io` **29.1.3**, `docker-buildx` **0.30.1** and `docker-compose-v2` **2.40.3**. If you are on 24.04 and Ubuntu's packaging and cadence suit you, `apt-get install docker.io docker-buildx docker-compose-v2` is now a working option — the runner images in this repository use exactly that. This package remains the way to get a current upstream `dockerd` built from source, on any distribution.
 
 ## Scope
 

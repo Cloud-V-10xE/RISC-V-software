@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Rebuild even if this runner version is already on Docker Hub'
+        description: 'Rebuild even if this runner version is already on Docker Hub (needed after any change to runner-image/, since the check only compares runner versions)'
         required: false
         type: boolean
         default: false
@@ -37,6 +37,7 @@ jobs:
       should_build: ${{ steps.decide.outputs.should_build }}
       version: ${{ steps.resolve.outputs.version }}
       asset_url: ${{ steps.resolve.outputs.asset_url }}
+      asset_sha256: ${{ steps.resolve.outputs.asset_sha256 }}
     steps:
       - name: Resolve latest riscv64 runner release
         id: resolve
@@ -77,13 +78,22 @@ jobs:
           VERSION=$(echo "$ASSET_NAME" \
             | sed -E 's/^actions-runner-linux-riscv64-(.+)\.tar\.gz$/\1/')
 
+          # The API exposes a digest on newer releases; when it is missing the
+          # build simply skips verification rather than failing, so an older
+          # release stays buildable.
+          ASSET_SHA256=$(echo "$REL" | jq -r \
+            '[.assets[] | select(.name | test("actions-runner-linux-riscv64-.*\\.tar\\.gz$"))
+              | .digest // empty] | first // ""' | sed 's/^sha256://')
+
           echo "tag=$TAG"
           echo "version=$VERSION"
           echo "asset=$ASSET_NAME"
+          echo "sha256=${ASSET_SHA256:-<not published>}"
 
           {
             echo "version=$VERSION"
             echo "asset_url=$ASSET_URL"
+            echo "asset_sha256=$ASSET_SHA256"
           } >> "$GITHUB_OUTPUT"
 
       - name: Decide whether to build
@@ -169,12 +179,15 @@ jobs:
           VERSION="${{ needs.check.outputs.version }}"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
 
+          # Context is runner-image/, not the variant directory: common/runner.sh
+          # is shared by both variants so their registration flags cannot drift.
           docker build \
             -f "runner-image/${{ matrix.variant }}/${{ matrix.dockerfile }}" \
             --build-arg "RUNNER_VERSION=${VERSION}" \
             --build-arg "RUNNER_URL=${{ needs.check.outputs.asset_url }}" \
+            --build-arg "RUNNER_SHA256=${{ needs.check.outputs.asset_sha256 }}" \
             -t "${IMAGE}:${{ matrix.tag }}-${VERSION}" \
-            "runner-image/${{ matrix.variant }}"
+            "runner-image"
 
       - name: Verify the image actually contains a working runner
         run: |
@@ -189,9 +202,64 @@ jobs:
             set -e
             test -f /home/runner/config.sh || { echo "config.sh missing"; exit 1; }
             test -f /home/runner/run.sh    || { echo "run.sh missing"; exit 1; }
+            test -x /usr/local/bin/runner.sh || { echo "runner.sh missing"; exit 1; }
             echo "runner version file: $(cat /home/runner/.runner_version 2>/dev/null || echo n/a)"
             file /home/runner/bin/Runner.Listener 2>/dev/null | grep -qi "RISC-V" \
               || echo "note: could not confirm RISC-V ELF via file(1)"
+          '
+
+          # runneruser must not be able to rewrite the scripts it is launched
+          # from — that is what keeps a compromised job from persisting as root.
+          docker run --rm --user 1001 --entrypoint /bin/bash "$REF" -c '
+            set -e
+            ! test -w /usr/local/bin/runner.sh || { echo "runner.sh is job-writable"; exit 1; }
+            echo "entrypoint scripts are not writable by runneruser"
+          '
+
+      - name: Smoke-test Docker modes
+        if: matrix.variant == 'docker-in-docker'
+        run: |
+          set -eux
+          VERSION="${{ needs.check.outputs.version }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
+          REF="${IMAGE}:${{ matrix.tag }}-${VERSION}"
+
+          # The CLI and both plugins have to be riscv64 binaries that actually
+          # execute — an apt package existing is not proof of that.
+          docker run --rm --entrypoint /bin/bash "$REF" -c '
+            set -e
+            docker --version
+            docker buildx version
+            docker compose version
+          '
+
+          # Refuse to publish an image whose dind path cannot start a daemon and
+          # build with it. Nested privileged containers are not available on
+          # every host, so skip rather than fail when the host will not allow it.
+          if ! docker run --rm --privileged --entrypoint /bin/true "$REF"; then
+            echo "::warning::host does not permit privileged containers — dind smoke test skipped"
+            exit 0
+          fi
+
+          docker run --rm --privileged --entrypoint /bin/bash "$REF" -c '
+            set -e
+            dockerd --host=unix:///var/run/docker.sock --group=docker \
+                    --data-root=/var/lib/docker --storage-driver=overlay2 \
+                    >/var/log/dockerd.log 2>&1 &
+            for i in $(seq 90); do docker version >/dev/null 2>&1 && break; sleep 1; done
+            docker info --format "inner daemon: {{.ServerVersion}} storage={{.Driver}}"
+
+            # vfs here means /var/lib/docker was not a real filesystem and every
+            # build would copy whole layers instead of using overlay2.
+            test "$(docker info --format "{{.Driver}}")" = "overlay2" \
+              || { echo "inner daemon fell back to $(docker info --format "{{.Driver}}")"; exit 1; }
+
+            # Tiny context directory on purpose: a context of / would tar the
+            # whole root filesystem before the build even starts.
+            mkdir -p /tmp/ctx && cp /etc/hostname /tmp/ctx/h
+            printf "FROM scratch\nCOPY h /h\n" > /tmp/ctx/Dockerfile
+            docker build -t dind-smoke:test /tmp/ctx >/dev/null
+            echo "inner docker build succeeded"
           '
 
       - name: Push ${{ matrix.tag }}-${{ needs.check.outputs.version }}

@@ -6,8 +6,11 @@
 #   the apt repo for noble is amd64/arm64/armhf/ppc64el/s390x. moby/moby's
 #   GitHub releases carry zero assets.
 #
-#   Ubuntu 24.04 riscv64 is stuck on docker.io 24.0.7 against upstream 29.x,
-#   and ships no docker-compose-plugin or docker-buildx-plugin for riscv64.
+#   Ubuntu's noble release pocket carries docker.io 24.0.7 for riscv64. Note
+#   that noble-updates has since moved to 29.1.3, and now also ships riscv64
+#   docker-buildx and docker-compose-v2 — so apt is a real option on 24.04 if
+#   you can accept Ubuntu's packaging and cadence. This package still exists
+#   for a current upstream dockerd built from source, independent of that.
 #
 #   Scope note: compose, buildx, buildkit and nerdctl ALREADY publish riscv64
 #   binaries upstream, so this workflow deliberately builds only the pieces

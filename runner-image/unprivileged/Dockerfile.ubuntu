@@ -1,7 +1,11 @@
 # GitHub Actions self-hosted runner for riscv64 — Ubuntu base, unprivileged.
 #
-# No docker socket handling: this variant runs entirely as runneruser and is
-# the right choice when the workflows do not need to drive Docker.
+# No Docker at all: this variant runs entirely as runneruser and is the right
+# choice when the workflows do not need to drive Docker. Use the Docker-capable
+# variant for jobs that do.
+#
+# Build context is runner-image/, not this directory — the registration script
+# in common/ is shared with the Docker-capable variant.
 #
 # RUNNER_URL and RUNNER_VERSION are supplied by the build workflow, which
 # resolves them from the latest Cloud-V-10xE/github-runner-riscv release.
@@ -9,6 +13,16 @@ FROM docker.io/ubuntu:24.04
 
 ARG RUNNER_VERSION
 ARG RUNNER_URL
+ARG RUNNER_SHA256=""
+
+# Fixed ids, so a bind-mounted _work directory has predictable ownership on the
+# host. 1000 is taken by the `ubuntu` user in the 24.04 base image.
+ARG RUNNER_UID=1001
+ARG RUNNER_GID=1001
+
+# See the Docker-capable variant: needed by jobs that install their own build
+# deps, but it does mean a workflow can become root inside the container.
+ARG RUNNER_SUDO=true
 
 LABEL org.opencontainers.image.title="GitHub Actions Runner (RISC-V, unprivileged)" \
       org.opencontainers.image.description="Self-hosted GitHub Actions runner for linux/riscv64" \
@@ -18,26 +32,57 @@ LABEL org.opencontainers.image.title="GitHub Actions Runner (RISC-V, unprivilege
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Explicit .NET runtime deps rather than libicu-dev — the headers are dead
+# weight in a runtime image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libatomic1 curl git ca-certificates libicu-dev sudo \
+        ca-certificates \
+        curl \
+        git \
+        libatomic1 \
+        libicu74 \
+        libkrb5-3 \
+        liblttng-ust1 \
+        libssl3 \
+        procps \
+        sudo \
+        zlib1g \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g "${RUNNER_GID}" runneruser \
+    && useradd -m -u "${RUNNER_UID}" -g "${RUNNER_GID}" -s /bin/bash runneruser
 
 WORKDIR /home/runner
 
-RUN test -n "${RUNNER_URL}" || (echo "RUNNER_URL build-arg is required" >&2; exit 1) \
-    && curl -fsSL --retry 3 --retry-delay 5 -o actions-runner.tar.gz "${RUNNER_URL}" \
-    && tar xzf actions-runner.tar.gz \
-    && rm actions-runner.tar.gz
+RUN set -eux; \
+    test -n "${RUNNER_URL}" || { echo "RUNNER_URL build-arg is required" >&2; exit 1; }; \
+    curl -fsSL --retry 3 --retry-delay 5 -o actions-runner.tar.gz "${RUNNER_URL}"; \
+    if [ -n "${RUNNER_SHA256}" ]; then \
+        echo "${RUNNER_SHA256}  actions-runner.tar.gz" | sha256sum -c -; \
+    else \
+        echo "note: RUNNER_SHA256 not supplied — tarball integrity not verified" >&2; \
+    fi; \
+    tar xzf actions-runner.tar.gz; \
+    rm actions-runner.tar.gz
 
 RUN bash ./bin/installdependencies.sh
 
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+COPY common/runner.sh /usr/local/bin/runner.sh
 
-RUN useradd -m runneruser \
-    && chown -R runneruser:runneruser /home/runner \
-    && echo "runneruser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/runneruser
+# Owned by root and not writable by runneruser: a job that can rewrite its own
+# entrypoint survives a container restart with whatever it planted.
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/runner.sh; \
+    chown root:root /usr/local/bin/runner.sh; \
+    chown -R runneruser:runneruser /home/runner; \
+    if [ "${RUNNER_SUDO}" = "true" ]; then \
+        echo "runneruser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/runneruser; \
+        chmod 0440 /etc/sudoers.d/runneruser; \
+    fi
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
+    CMD pgrep -f Runner.Listener >/dev/null || exit 1
 
 USER runneruser
 
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/runner.sh"]
