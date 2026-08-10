@@ -8,18 +8,22 @@ GitHub does not publish a riscv64 build of `actions/runner` — the official rel
 
 ## Tags
 
-All four variants live in the same Docker Hub repository:
+Both variants live in the same Docker Hub repository:
 
 | Tag | Base | Docker support |
 |---|---|---|
-| `latest`, `ubuntu-<version>` | Ubuntu 24.04 | no |
-| `debian-<version>` | Debian trixie | no |
-| `docker-latest`, `docker-ubuntu-<version>` | Ubuntu 24.04 | yes |
-| `docker-debian-<version>` | Debian trixie | yes |
+| `latest`, `ubuntu-<version>` | Ubuntu 24.04 LTS | no |
+| `docker-latest`, `docker-ubuntu-<version>` | Ubuntu 24.04 LTS | yes |
 
 `<version>` is the runner version, e.g. `2.336.0`.
 
-> Debian images use **trixie**, not bookworm. `debian:bookworm` publishes no riscv64 manifest — trixie was the first Debian release carrying riscv64 as a release architecture.
+## Why Ubuntu 24.04 only
+
+Both images are built on **Ubuntu 24.04 LTS (glibc 2.39)**, deliberately — there is no Debian variant.
+
+Debian trixie ships **glibc 2.41**. Anything compiled inside a trixie-based runner links against `GLIBC_2.41` symbols and then fails to start on Ubuntu 24.04 with `version 'GLIBC_2.41' not found`. Since every package in this archive is built on `ubuntu-24.04-riscv`, pinning the runner image to the same base means a binary produced inside one of these containers runs anywhere 24.04 runs.
+
+glibc is backward compatible, not forward compatible: build on the *oldest* glibc you intend to support.
 
 ## Usage
 

@@ -136,28 +136,24 @@ jobs:
       # apt-get + installdependencies.sh. Racing them just thrashes the box.
       max-parallel: 1
       fail-fast: false
+      # Ubuntu 24.04 only, deliberately.
+      #
+      # 24.04 is glibc 2.39; Debian trixie is glibc 2.41. Anything compiled
+      # inside a trixie-based runner links against GLIBC_2.41 symbols and then
+      # dies with "GLIBC_2.41 not found" on 24.04 — which is what the rest of
+      # this archive is built on (ubuntu-24.04-riscv). Keeping the runner image
+      # on the same base as the build fleet means a binary produced in one of
+      # these containers runs anywhere 24.04 runs.
       matrix:
         include:
           - variant: unprivileged
-            base: ubuntu
             dockerfile: Dockerfile.ubuntu
             tag: ubuntu
             extra_tag: latest
-          - variant: unprivileged
-            base: debian
-            dockerfile: Dockerfile.debian
-            tag: debian
-            extra_tag: ''
           - variant: docker-in-docker
-            base: ubuntu
             dockerfile: Dockerfile.ubuntu
             tag: docker-ubuntu
             extra_tag: docker-latest
-          - variant: docker-in-docker
-            base: debian
-            dockerfile: Dockerfile.debian
-            tag: docker-debian
-            extra_tag: ''
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -167,7 +163,7 @@ jobs:
           echo "${{ secrets.DOCKERHUB_TOKEN }}" \
             | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build ${{ matrix.variant }} / ${{ matrix.base }}
+      - name: Build ${{ matrix.variant }} (Ubuntu 24.04)
         run: |
           set -eux
           VERSION="${{ needs.check.outputs.version }}"
