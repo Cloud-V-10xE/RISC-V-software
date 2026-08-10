@@ -4,7 +4,7 @@ name: Build CMake for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 2 * *"
+    - cron: "0 08 2 * *"
 
 jobs:
   build:

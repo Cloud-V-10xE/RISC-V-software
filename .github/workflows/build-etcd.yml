@@ -8,7 +8,7 @@ on:
         required: false
         default: 'latest'
   schedule:
-    - cron: "0 0 12 * *"
+    - cron: "0 02 21 * *"
 
 env:
   REGISTRY: ghcr.io
@@ -122,19 +122,22 @@ jobs:
             https://github.com/etcd-io/etcd.git \
             "$GITHUB_WORKSPACE/etcd"
       - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          # Check the cloned go.mod first; fallback to standard 1.24 if it fails
-          go-version-file: '$GITHUB_WORKSPACE/etcd/go.mod'
-        continue-on-error: true
-
-      # Fallback step: If setup-go failed or couldn't parse it on RISC-V, use native apt-get
-      - name: Setup Go Fallback (Apt)
         run: |
-          if ! command -v go &> /dev/null; then
-            echo "Official setup-go action bypassed or failed on RISC-V. Falling back to apt install..."
-            sudo apt update && sudo apt install -y golang
-          fi
+          set -eu
+          # setup-go has no riscv64 distribution and apt's `golang` (1.22) hits
+          # runtime scheduler crashes on riscv64, so install straight from
+          # go.dev with a pinned fallback if the index is unreachable.
+          GO_VER=$(curl -fsSL --retry 3 'https://go.dev/dl/?mode=json' 2>/dev/null \
+            | grep -o '"version"[[:space:]]*:[[:space:]]*"go[0-9.]*"' | head -n1 \
+            | grep -o 'go[0-9.]*' || true)
+          [ -n "$GO_VER" ] || GO_VER="go1.24.6"
+          curl -fsSL --retry 3 --retry-delay 10 -o /tmp/go.tar.gz \
+            "https://go.dev/dl/${GO_VER}.linux-riscv64.tar.gz"
+          sudo apt-get remove -y golang golang-go 2>/dev/null || true
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+          /usr/local/go/bin/go version
       - name: Build and push etcd for RISC-V
         run: |
           cd "$GITHUB_WORKSPACE/etcd"

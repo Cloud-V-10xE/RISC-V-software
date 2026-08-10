@@ -4,7 +4,7 @@ name: Build gRPC for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 6 * *"
 
 jobs:
   build:

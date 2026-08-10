@@ -1,0 +1,92 @@
+# Overlay for llama.cpp. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   llama.cpp publishes release binaries for a long tail of platforms —
+#   including s390x — but not riscv64. The request to add it
+#   (ggml-org/llama.cpp#20988) got a maintainer "sounds reasonable, feel free
+#   to open a PR" and was then closed not_planned by the stale bot.
+#
+#   Meanwhile the RVV engineering is intense: VLEN=1024 vec_dot, xtheadvector
+#   support, and runtime feature detection via the riscv_hwprobe syscall in
+#   ggml/src/ggml-cpu/arch/riscv/cpu-feats.cpp. The build system already has a
+#   riscv64 branch registering rv64gc and rv64gc_v variants. Nothing needs
+#   patching — the binaries simply are not published.
+#
+#   It is also absent from Debian trixie and from Ubuntu entirely.
+name: Build llama.cpp for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 08 10 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: llama.cpp RISC-V
+      timeout-minutes: 180
+      # gcc-14 explicitly: noble defaults to GCC 13, which is too old for the
+      # RVV intrinsics llama.cpp's riscv64_v variant uses.
+      apt-packages: build-essential git cmake ninja-build pkg-config gcc-14 g++-14 libcurl4-openssl-dev file
+      build-script: |
+        set -eux
+        LLAMA_REPO="https://github.com/ggml-org/llama.cpp.git"
+
+        # llama.cpp tags releases as bNNNN.
+        VERSION=$(git ls-remote --tags --refs "$LLAMA_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^b[0-9]+$' \
+          | sed 's/^b//' \
+          | sort -n | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not resolve a llama.cpp tag" >&2; exit 1; }
+        echo "Latest llama.cpp: b$VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/llama-src"
+        git clone --depth=1 --branch "b${VERSION}" "$LLAMA_REPO" \
+          "$GITHUB_WORKSPACE/llama-src"
+        cd "$GITHUB_WORKSPACE/llama-src"
+
+        PREFIX="$GITHUB_WORKSPACE/llama-install"
+        rm -rf "$PREFIX" build
+
+        # GGML_CPU_ALL_VARIANTS + GGML_BACKEND_DL is the key combination: it
+        # builds both the rv64gc and rv64gc_v backends as loadable modules and
+        # picks between them at runtime via riscv_hwprobe. That yields ONE
+        # portable tarball that stays scalar on non-vector boards (JH7110) and
+        # upgrades itself to RVV where the hardware has it.
+        #
+        # Never set a bare -march=rv64gcv on a redistributable artifact — it
+        # SIGILLs on the most common RISC-V SBCs.
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+          -DCMAKE_C_COMPILER=gcc-14 \
+          -DCMAKE_CXX_COMPILER=g++-14 \
+          -DGGML_CPU_ALL_VARIANTS=ON \
+          -DGGML_BACKEND_DL=ON \
+          -DGGML_NATIVE=OFF \
+          -DGGML_OPENMP=OFF \
+          -DLLAMA_CURL=ON \
+          -DBUILD_SHARED_LIBS=ON
+        cmake --build build --config Release -j"$(nproc)"
+        cmake --install build
+
+        export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+        "$PREFIX/bin/llama-cli" --version 2>&1 | head -5 || true
+        file "$PREFIX/bin/llama-cli" | grep -q "RISC-V" \
+          || { echo "llama-cli is not a RISC-V binary" >&2; exit 1; }
+
+        echo "ggml CPU backend variants built:"
+        ls "$PREFIX/lib" | grep -i "ggml" || true
+
+        ASSET_NAME="llama-cpp-b${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

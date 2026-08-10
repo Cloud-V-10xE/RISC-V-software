@@ -41,12 +41,12 @@
       "workflow": "build-node.yml"
     },
     {
-      "id": "openjdk",
-      "label": "OpenJDK",
+      "id": "luajit",
+      "label": "LuaJIT",
       "category": "Runtimes",
-      "description": "Open-source Java Development Kit",
+      "description": "Just-in-time compiler for Lua — upstream has no RISC-V backend and Ubuntu 24.04 ships no riscv64 build, so this is the only prebuilt option",
       "central_release": true,
-      "workflow": "build-jdk.yml"
+      "workflow": "build-luajit.yml"
     },
     {
       "id": "torch",
@@ -73,14 +73,6 @@
       "workflow": "build-onnx.yml"
     },
     {
-      "id": "bazelisk",
-      "label": "Bazelisk",
-      "category": "Build Tools",
-      "description": "User-friendly launcher for Bazel",
-      "central_release": true,
-      "workflow": "build-bazelisk.yml"
-    },
-    {
       "id": "kubernetes",
       "label": "Kubernetes",
       "category": "Infrastructure",
@@ -97,15 +89,12 @@
       "workflow": "build-calico.yaml"
     },
     {
-      "id": "coredns",
-      "label": "CoreDNS",
+      "id": "loki",
+      "label": "Loki",
       "category": "Infrastructure",
-      "description": "DNS server for Kubernetes service discovery",
-      "central_release": false,
-      "workflow": "build-coredns.yml",
-      "install_type": "docker",
-      "docker_image": "cloudv10x/coredns",
-      "docker_tag": "latest"
+      "description": "Log aggregation system by Grafana — upstream builds riscv64 in CI but never publishes it, and no distro packages it",
+      "central_release": true,
+      "workflow": "build-loki.yml"
     },
     {
       "id": "kube-apiserver",
@@ -170,26 +159,21 @@
       "central_release": true,
       "workflow": "build-cmake.yml"
     },
-    { 
+    {
       "id": "ninja",
       "label": "Ninja",
       "category": "Build Tools",
       "description": "Small fast build system used by LLVM, CMake and Chrome",
-      "central_release": true, "workflow": "build-ninja.yml"  
+      "central_release": true,
+      "workflow": "build-ninja.yml"
     },
-    { "id": "sqlite",
+    {
+      "id": "sqlite",
       "label": "SQLite",
       "category": "Runtimes",
       "description": "Lightweight embedded SQL database engine — latest versions not prebuilt for riscv64",
       "central_release": true,
       "workflow": "build-sqlite.yml"
-    },
-    { 
-      "id": "helm",
-      "label": "Helm",
-      "category": "Infrastructure",
-      "description": "Kubernetes package manager — no official riscv64 binary from upstream",           
-      "central_release": true, "workflow": "build-helm.yml"   
     },
     {
       "id": "python",
@@ -232,20 +216,87 @@
       "workflow": "build-grpc.yml"
     },
     {
-      "id": "containerd",
-      "label": "containerd",
-      "category": "Infrastructure",
-      "description": "Container runtime used by Kubernetes and Docker — no official riscv64 binary",
+      "id": "ffmpeg",
+      "label": "FFmpeg",
+      "category": "Media",
+      "description": "Complete media framework — no prebuilt riscv64 exists anywhere, and Ubuntu 24.04 is frozen at 6.1.1 with 30 RISC-V vector asm files vs ~102 upstream",
       "central_release": true,
-      "workflow": "build-containerd.yml"
+      "workflow": "build-ffmpeg.yml"
     },
     {
-      "id": "fzf",
-      "label": "fzf",
-      "category": "Build Tools",
-      "description": "Command-line fuzzy finder — massively popular developer tool with no riscv64 binary",
+      "id": "dav1d",
+      "label": "dav1d",
+      "category": "Media",
+      "description": "Fast AV1 decoder by VideoLAN — Ubuntu 24.04 ships only inverse-transform RVV asm; upstream adds motion compensation, cdef, ipred and film grain",
       "central_release": true,
-      "workflow": "build-fzf.yml"
+      "workflow": "build-dav1d.yml"
+    },
+    {
+      "id": "x265",
+      "label": "x265",
+      "category": "Media",
+      "description": "HEVC/H.265 encoder — gained a full RISC-V vector backend in 4.2; Ubuntu 24.04 still ships 3.5 from 2021 with zero RISC-V code",
+      "central_release": true,
+      "workflow": "build-x265.yml"
+    },
+    {
+      "id": "svt-av1",
+      "label": "SVT-AV1",
+      "category": "Media",
+      "description": "AV1 encoder — upstream publishes no binaries for any architecture and Ubuntu 24.04 is three major versions behind",
+      "central_release": true,
+      "workflow": "build-svt-av1.yml"
+    },
+    {
+      "id": "llama-cpp",
+      "label": "llama.cpp",
+      "category": "ML Frameworks",
+      "description": "LLM inference in C/C++ — upstream ships s390x release binaries but not riscv64, despite active RVV optimization work",
+      "central_release": true,
+      "workflow": "build-llama-cpp.yml"
+    },
+    {
+      "id": "box64",
+      "label": "box64",
+      "category": "Runtimes",
+      "description": "x86-64 emulator for RISC-V — upstream ships no host binary for any architecture, and Ubuntu 24.04 has no package at all",
+      "central_release": true,
+      "workflow": "build-box64.yml"
+    },
+    {
+      "id": "nim",
+      "label": "Nim",
+      "category": "Runtimes",
+      "description": "Nim compiler — no riscv64 binary via releases, nightlies or choosenim; Ubuntu 24.04 is stuck on 1.6.14",
+      "central_release": true,
+      "workflow": "build-nim.yml"
+    },
+    {
+      "id": "opentofu",
+      "label": "OpenTofu",
+      "category": "Infrastructure",
+      "description": "MPL-licensed Terraform fork — no riscv64 in its 164 release assets and not packaged in Debian or Ubuntu",
+      "central_release": true,
+      "workflow": "build-opentofu.yml"
+    },
+    {
+      "id": "docker",
+      "label": "Docker Engine",
+      "category": "Infrastructure",
+      "description": "dockerd, docker CLI and docker-proxy — download.docker.com has no riscv64 at all and Ubuntu 24.04 is pinned to 24.0.7",
+      "central_release": true,
+      "workflow": "build-docker.yml"
+    },
+    {
+      "id": "github-actions-riscv",
+      "label": "GitHub Actions Runner",
+      "category": "Infrastructure",
+      "description": "Self-hosted GitHub Actions runner container for riscv64 — Ubuntu and Debian bases, with and without Docker support",
+      "central_release": false,
+      "workflow": "build-runner-image.yml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/github-actions-riscv",
+      "docker_tag": "latest"
     }
   ]
 }

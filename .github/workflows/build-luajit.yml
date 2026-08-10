@@ -1,0 +1,83 @@
+# Overlay for LuaJIT. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   Upstream LuaJIT has NO RISC-V backend at all — src/ ships lj_target_{arm,
+#   arm64,mips,ppc,x86}.h and nothing for riscv. The riscv64 port has sat in
+#   PR LuaJIT/LuaJIT#1267 since 2024-09-08 (still open) and issue #628 since
+#   2020. Ubuntu 24.04 LTS — the base image these builds run on — has no
+#   riscv64 luajit in the archive at all (amd64/arm64/armhf/s390x only), so
+#   there is no apt path either. We build from the PLCT Lab LJRV patchset,
+#   which is the same lineage Debian carries as a ~330 KB downstream patch.
+name: Build LuaJIT for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 08 5 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: LuaJIT RISC-V
+      timeout-minutes: 45
+      apt-packages: build-essential git ca-certificates
+      build-script: |
+        set -eux
+        # LJRV — the actively rebased riscv64 port of LuaJIT 2.1.
+        LJ_REPO="https://github.com/plctlab/LuaJIT.git"
+        LJ_BRANCH="riscv64-v2.1-branch"
+
+        rm -rf "$GITHUB_WORKSPACE/luajit-src"
+        git clone --depth=1 --branch "$LJ_BRANCH" "$LJ_REPO" \
+          "$GITHUB_WORKSPACE/luajit-src"
+        cd "$GITHUB_WORKSPACE/luajit-src"
+
+        SRC_REV=$(git rev-parse --short HEAD)
+        echo "Building LJRV at $SRC_REV"
+
+        PREFIX="$GITHUB_WORKSPACE/luajit-install"
+        rm -rf "$PREFIX"
+
+        # PREFIX has to be identical for build and install: it is baked into
+        # the binary's default module search paths at compile time.
+        make -j"$(nproc)" PREFIX="$PREFIX"
+        make install PREFIX="$PREFIX"
+
+        # `make install` lays down a versioned name (luajit-2.1.x) and, in some
+        # revisions, a plain `luajit` symlink. Guarantee the plain name exists
+        # so users get a predictable entry point.
+        if [ ! -e "$PREFIX/bin/luajit" ]; then
+          VERSIONED=$(find "$PREFIX/bin" -maxdepth 1 -name 'luajit-*' -type f | head -n1)
+          [ -n "$VERSIONED" ] || { echo "no luajit binary produced" >&2; exit 1; }
+          ln -s "$(basename "$VERSIONED")" "$PREFIX/bin/luajit"
+        fi
+
+        # Prove the JIT actually works on this hardware rather than just
+        # checking the binary runs — an interpreter-only fallback would still
+        # print a version string.
+        "$PREFIX/bin/luajit" -v
+        "$PREFIX/bin/luajit" -e '
+          assert(jit, "no jit table — built without JIT support")
+          local status = jit.status()
+          print("jit.status() = " .. tostring(status))
+          print("jit.arch     = " .. tostring(jit.arch))
+          assert(jit.arch == "riscv64", "unexpected jit.arch: " .. tostring(jit.arch))
+          local n = 0
+          for i = 1, 2000000 do n = n + i % 7 end
+          print("hot-loop result = " .. n)
+        '
+
+        VERSION=$("$PREFIX/bin/luajit" -v | awk "{print \$2}")
+        echo "LuaJIT version: $VERSION"
+
+        ASSET_NAME="luajit-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

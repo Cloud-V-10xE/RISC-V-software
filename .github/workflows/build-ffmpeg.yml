@@ -1,0 +1,125 @@
+# Overlay for FFmpeg. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   No prebuilt riscv64 FFmpeg exists anywhere. All three canonical static-build
+#   providers ship x86_64 and arm64 only — BtbN/FFmpeg-Builds, John Van Sickle,
+#   and eugeneware/ffmpeg-static.
+#
+#   The version gap is severe and measurable. Ubuntu 24.04 riscv64 is frozen at
+#   FFmpeg 6.1.1 (no noble-updates entry) while upstream is on 9.x, and the
+#   RISC-V vector assembly grew from 30 files in libavcodec/riscv at n6.1 to
+#   ~102 at n8.1. That work — largely by Rémi Denis-Courmont, with SiFive and
+#   RISE funding H.264/HEVC/VVC kernels — shows 4x-20x checkasm speedups on
+#   K230 and BananaPi F3 hardware. Building from source ships roughly 3.4x more
+#   RISC-V-optimised code than the distro package.
+name: Build FFmpeg for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 02 12 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: FFmpeg RISC-V
+      timeout-minutes: 300
+      apt-packages: >-
+        build-essential git pkg-config yasm nasm file
+        libx264-dev libx265-dev libvpx-dev libdav1d-dev libaom-dev
+        libopus-dev libvorbis-dev libmp3lame-dev
+        libass-dev libfreetype6-dev libfontconfig1-dev
+        libssl-dev zlib1g-dev libbz2-dev liblzma-dev
+        libsvtav1-dev librav1e-dev
+      build-script: |
+        set -eux
+        FFMPEG_REPO="https://git.ffmpeg.org/ffmpeg.git"
+
+        # Newest nX.Y[.Z] release tag; excludes nX.Y-dev and rc tags.
+        VERSION=$(git ls-remote --tags --refs "$FFMPEG_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^n[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+          | sed 's/^n//' \
+          | sort -V | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not resolve an FFmpeg tag" >&2; exit 1; }
+        echo "Latest FFmpeg: $VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/ffmpeg-src"
+        git clone --depth=1 --branch "n${VERSION}" "$FFMPEG_REPO" \
+          "$GITHUB_WORKSPACE/ffmpeg-src"
+        cd "$GITHUB_WORKSPACE/ffmpeg-src"
+
+        echo "RISC-V asm files present:"
+        for d in libavcodec libavutil libswscale libavfilter; do
+          n=$(ls "$d/riscv" 2>/dev/null | wc -l)
+          echo "  $d/riscv: $n"
+        done
+
+        PREFIX="$GITHUB_WORKSPACE/ffmpeg-install"
+        rm -rf "$PREFIX"
+
+        # Deliberately NO --cpu= and no -march=rv64gcv.
+        #
+        # FFmpeg gates every RVV routine behind `.option arch, +v` in the
+        # assembly plus runtime hwprobe/AT_HWCAP detection, so the generic
+        # build is fast on RVV-1.0 parts (K230, SpacemiT K1) *and* still runs
+        # on T-Head XTheadVector 0.7.1 boards (StarFive JH7110 / VisionFive 2,
+        # Allwinner D1) where forcing +v at compile time would SIGILL. Those
+        # are the most widely deployed RISC-V SBCs, so portability wins.
+        # GPL + version3 only. Deliberately NOT --enable-nonfree: that flag
+        # (and libfdk-aac, which requires it) produces a binary that cannot be
+        # legally redistributed, which would make the whole release unusable
+        # for this project's purpose. AAC encoding uses FFmpeg's native encoder.
+        ./configure \
+          --prefix="$PREFIX" \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-shared \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libvpx \
+          --enable-libdav1d \
+          --enable-libaom \
+          --enable-libsvtav1 \
+          --enable-librav1e \
+          --enable-libopus \
+          --enable-libvorbis \
+          --enable-libmp3lame \
+          --enable-libass \
+          --enable-libfreetype \
+          --enable-libfontconfig \
+          --enable-openssl \
+          --enable-runtime-cpudetect
+
+        # Assert RVV actually got enabled. An assembler too old for
+        # `.option arch, +v` degrades silently to a scalar build that still
+        # reports success, so check the generated config rather than trusting
+        # the exit code.
+        if grep -q '^#define HAVE_RVV 1' ffbuild/config.h; then
+          echo "RVV enabled"
+        else
+          echo "::error::RVV is NOT enabled — the assembler likely does not support '.option arch, +v'."
+          echo "Shipping this would be a scalar build masquerading as an optimised one."
+          exit 1
+        fi
+
+        make -j"$(nproc)"
+        make install
+
+        export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+        "$PREFIX/bin/ffmpeg" -version
+        "$PREFIX/bin/ffmpeg" -hide_banner -buildconf | head -40
+        file "$PREFIX/bin/ffmpeg" | grep -q "RISC-V" \
+          || { echo "ffmpeg is not a RISC-V binary" >&2; exit 1; }
+
+        ASSET_NAME="ffmpeg-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

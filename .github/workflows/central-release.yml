@@ -1,207 +1,276 @@
 name: Central Release
+
+# Runs on the 26th, after every build workflow has had its slot earlier in the
+# month. It used to run at "0 0 1 * *" — the exact same minute as 18 build
+# workflows — so it always packaged the *previous* cycle's artifacts and raced
+# whatever was still compiling.
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Collect and report assets but do not publish a release'
+        required: false
+        type: boolean
+        default: false
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 26 * *"
+
+concurrency:
+  group: central-release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set release date
         id: date
-        run: |
-          RELEASE_DATE=$(date +%Y-%m-%d)
-          echo "release_date=$RELEASE_DATE" >> "$GITHUB_OUTPUT"
+        run: echo "release_date=$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-      - name: Install GitHub CLI and jq
+      - name: Install jq
         run: |
-          sudo apt update
-          sudo apt install -y gh jq
+          command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
 
       - name: Load package list from packages.json
         id: pkgs
         run: |
+          set -euo pipefail
           PKGS_JSON=".github/pages/packages.json"
+          [ -f "$PKGS_JSON" ] || { echo "::error::$PKGS_JSON not found"; exit 1; }
+          jq -e . "$PKGS_JSON" >/dev/null || { echo "::error::$PKGS_JSON is not valid JSON"; exit 1; }
 
-          if [ ! -f "$PKGS_JSON" ]; then
-            echo "ERROR: $PKGS_JSON not found."
-            exit 1
-          fi
+          # id<TAB>workflow, for packages that belong in the central release.
+          jq -r '.packages[] | select(.central_release == true) | "\(.id)\t\(.workflow)"' \
+            "$PKGS_JSON" > /tmp/cr_packages.tsv
 
-          # Extract workflows and ids for packages where central_release == true
-          WORKFLOWS=$(jq -r '.packages[] | select(.central_release == true) | .workflow' "$PKGS_JSON")
-          IDS=$(jq -r '.packages[] | select(.central_release == true) | .id' "$PKGS_JSON")
+          COUNT=$(wc -l < /tmp/cr_packages.tsv)
+          [ "$COUNT" -gt 0 ] || { echo "::error::no central_release packages found"; exit 1; }
+          echo "Packages in central release: $COUNT"
+          cut -f1 /tmp/cr_packages.tsv | tr '\n' ' '; echo
 
-          echo "Packages included in central release:"
-          echo "$IDS"
-
-          # Write to files so next steps can read them
-          echo "$WORKFLOWS" > /tmp/cr_workflows.txt
-          echo "$IDS"       > /tmp/cr_ids.txt
-
-      - name: Download latest artifacts dynamically
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+      - name: Collect artifacts from latest successful builds
         run: |
+          set -uo pipefail
           mkdir -p release_assets
+          : > /tmp/fresh.txt
+          : > /tmp/missing.txt
 
-          FAILED_WORKFLOWS=()
+          while IFS=$'\t' read -r ID WF; do
+            [ -z "$ID" ] && continue
+            echo "──────── $ID ($WF) ────────"
 
-          while IFS= read -r WF; do
-            [ -z "$WF" ] && continue
-            echo "──────────────────────────────────────"
-            echo "Processing workflow: $WF"
+            # --limit 100 (was 20): a package that failed for a few cycles used
+            # to fall off the end of the window and silently vanish from the
+            # release even though a good artifact still existed.
+            RUN_ID=""
+            for attempt in 1 2 3; do
+              RUN_ID=$(gh run list --repo "$GH_REPO" --workflow "$WF" \
+                        --branch main --limit 100 \
+                        --json databaseId,status,conclusion \
+                        --jq 'map(select(.status=="completed" and .conclusion=="success"))
+                              | first | .databaseId // empty' 2>/dev/null) && break
+              echo "  gh run list failed (attempt $attempt), retrying..." >&2
+              sleep 10
+            done
 
-            LATEST_RUN_ID=$(gh run list \
-              --repo "$GH_REPO" \
-              --workflow="$WF" \
-              --branch=main \
-              --limit 20 \
-              --json databaseId,status,conclusion \
-              | jq -r '.[] | select(.status=="completed" and .conclusion=="success") | .databaseId' \
-              | head -n1)
-
-            if [ -z "$LATEST_RUN_ID" ]; then
-              echo "⚠️  No successful run found for $WF, skipping"
-              FAILED_WORKFLOWS+=("$WF")
+            if [ -z "$RUN_ID" ]; then
+              echo "  no successful run found"
+              echo "$ID" >> /tmp/missing.txt
               continue
             fi
+            echo "  latest successful run: $RUN_ID"
 
-            echo "✅ Found run ID: $LATEST_RUN_ID for $WF"
-
-            ARTIFACTS=$(gh api \
-              "repos/$GH_REPO/actions/runs/$LATEST_RUN_ID/artifacts" \
-              | jq -r '.artifacts[].name')
-
+            # Artifacts expire (90d). A run can be "successful" and still have
+            # nothing left to download, so treat that as missing, not fatal.
+            ARTIFACTS=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/artifacts" \
+                          --jq '.artifacts[] | select(.expired == false) | .name' 2>/dev/null)
             if [ -z "$ARTIFACTS" ]; then
-              echo "⚠️  No artifacts found for run $LATEST_RUN_ID of $WF"
-              FAILED_WORKFLOWS+=("$WF")
+              echo "  no unexpired artifacts on run $RUN_ID"
+              echo "$ID" >> /tmp/missing.txt
               continue
             fi
 
-            DOWNLOAD_FAILED=false
-            for ART in $ARTIFACTS; do
-              echo "  ⬇️  Downloading: $ART"
-              if ! gh run download "$LATEST_RUN_ID" \
-                --repo "$GH_REPO" \
-                --name "$ART" \
-                -D release_assets; then
-                echo "⚠️  Failed to download artifact '$ART' for $WF, skipping"
-                DOWNLOAD_FAILED=true
-                break
-              fi
-            done
+            GOT_ONE=false
+            while IFS= read -r ART; do
+              [ -z "$ART" ] && continue
+              # Skip build logs and similar side artifacts.
+              case "$ART" in build-log*|*.log) continue ;; esac
+              echo "  downloading: $ART"
+              for attempt in 1 2 3; do
+                if gh run download "$RUN_ID" --repo "$GH_REPO" \
+                     --name "$ART" -D release_assets 2>/dev/null; then
+                  GOT_ONE=true
+                  break
+                fi
+                echo "    download failed (attempt $attempt), retrying..." >&2
+                sleep 15
+              done
+            done <<< "$ARTIFACTS"
 
-            if [ "$DOWNLOAD_FAILED" = true ]; then
-              FAILED_WORKFLOWS+=("$WF")
-              continue
+            if [ "$GOT_ONE" = true ]; then
+              echo "$ID" >> /tmp/fresh.txt
+            else
+              echo "  all downloads failed"
+              echo "$ID" >> /tmp/missing.txt
             fi
+          done < /tmp/cr_packages.tsv
 
-          done < /tmp/cr_workflows.txt
+          echo "=== fresh: $(wc -l < /tmp/fresh.txt) | missing: $(wc -l < /tmp/missing.txt) ==="
 
-          if [ ${#FAILED_WORKFLOWS[@]} -gt 0 ]; then
-            echo ""
-            echo "⚠️  The following workflows had no successful runs:"
-            for WF in "${FAILED_WORKFLOWS[@]}"; do
-              echo "   - $WF"
-            done
-          fi
-
-      - name: List downloaded artifacts
+      - name: Carry forward assets for packages that did not build
         run: |
-          echo "Contents of release_assets:"
-          ls -lh release_assets/
+          set -uo pipefail
+          : > /tmp/carried.txt
+          : > /tmp/absent.txt
+          [ -s /tmp/missing.txt ] || { echo "nothing to carry forward"; exit 0; }
 
-      - name: Verify all expected artifacts are present
-        id: verify
-        run: |
-          MISSING_LIST=()
+          # A build failing this cycle must never *remove* a package from the
+          # archive — users following a documented download link should not get
+          # a 404 because one compile broke. Reuse the last published binary and
+          # label it in the notes.
+          TAGS=$(gh release list --repo "$GH_REPO" --limit 15 \
+                   --json tagName --jq '.[].tagName' 2>/dev/null || true)
 
           while IFS= read -r ID; do
             [ -z "$ID" ] && continue
-            if ! ls release_assets/ | grep -qi "$ID"; then
-              echo "⚠️  Missing artifact: $ID"
-              MISSING_LIST+=("$ID")
-            else
-              echo "✅ Found artifact: $ID"
-            fi
-          done < /tmp/cr_ids.txt
+            FOUND=""
+            while IFS= read -r TAG; do
+              [ -z "$TAG" ] && continue
+              if gh release view "$TAG" --repo "$GH_REPO" --json assets \
+                   --jq '.assets[].name' 2>/dev/null | grep -qiE "^${ID}-"; then
+                if gh release download "$TAG" --repo "$GH_REPO" \
+                     --pattern "${ID}-*" -D release_assets --clobber 2>/dev/null; then
+                  FOUND="$TAG"
+                  break
+                fi
+              fi
+            done <<< "$TAGS"
 
-          if [ ${#MISSING_LIST[@]} -gt 0 ]; then
-            echo ""
-            echo "⚠️  Missing artifacts: ${MISSING_LIST[*]}"
-            echo "missing_artifacts=${MISSING_LIST[*]}" >> "$GITHUB_OUTPUT"
-            echo "all_present=false" >> "$GITHUB_OUTPUT"
-          else
-            echo ""
-            echo "✅ All expected artifacts are present"
-            echo "all_present=true" >> "$GITHUB_OUTPUT"
+            if [ -n "$FOUND" ]; then
+              echo "  $ID <- carried forward from $FOUND"
+              echo "$ID ($FOUND)" >> /tmp/carried.txt
+            else
+              echo "  $ID has never been released"
+              echo "$ID" >> /tmp/absent.txt
+            fi
+          done < /tmp/missing.txt
+
+      - name: Verify collected assets
+        id: verify
+        run: |
+          set -uo pipefail
+          echo "Contents of release_assets:"
+          ls -lh release_assets/ || true
+
+          # Flatten: `gh run download` can nest a per-artifact directory.
+          find release_assets -mindepth 2 -type f -exec mv -n -t release_assets {} + 2>/dev/null || true
+          find release_assets -mindepth 1 -type d -empty -delete 2>/dev/null || true
+          # Drop anything that is not a shippable binary artifact.
+          find release_assets -type f ! \( -name '*.tar.gz' -o -name '*.whl' -o -name '*.tar.xz' -o -name '*.zip' \) -delete 2>/dev/null || true
+
+          ASSET_COUNT=$(find release_assets -maxdepth 1 -type f | wc -l)
+          echo "asset_count=$ASSET_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Collected $ASSET_COUNT assets"
+
+          # Publishing an empty release would replace a good "latest" with a
+          # useless one. Fail instead and leave the previous release standing.
+          if [ "$ASSET_COUNT" -eq 0 ]; then
+            echo "::error::No assets collected — refusing to publish an empty release."
+            exit 1
           fi
+
+          {
+            echo "fresh_count=$( [ -f /tmp/fresh.txt ] && wc -l < /tmp/fresh.txt || echo 0 )"
+            echo "carried_count=$( [ -f /tmp/carried.txt ] && wc -l < /tmp/carried.txt || echo 0 )"
+            echo "absent_count=$( [ -f /tmp/absent.txt ] && wc -l < /tmp/absent.txt || echo 0 )"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build release notes
-        id: release-notes
         run: |
+          set -uo pipefail
           RELEASE_DATE="${{ steps.date.outputs.release_date }}"
-          ALL_PRESENT="${{ steps.verify.outputs.all_present }}"
-          MISSING="${{ steps.verify.outputs.missing_artifacts }}"
 
-          ARTIFACT_DETAILS=""
-          for FILE in release_assets/*; do
-            FNAME=$(basename "$FILE")
-            FSIZE=$(du -sh "$FILE" | cut -f1)
-            ARTIFACT_DETAILS="${ARTIFACT_DETAILS}\n- \`${FNAME}\` (${FSIZE})"
-          done
+          {
+            echo "## RISC-V Binaries — $RELEASE_DATE"
+            echo
+            echo "Prebuilt riscv64 binaries, compiled natively on RISC-V hardware."
+            echo
+            echo "### Included artifacts"
+            echo
+            echo "| File | Size |"
+            echo "|------|------|"
+            for f in release_assets/*; do
+              [ -f "$f" ] || continue
+              printf '| `%s` | %s |\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+            done
+            echo
 
-          if [ "$ALL_PRESENT" = "true" ]; then
-            STATUS_LINE="✅ All expected artifacts included."
-          else
-            STATUS_LINE="⚠️ Some artifacts were missing and excluded: \`${MISSING}\`"
-          fi
+            if [ -s /tmp/fresh.txt ]; then
+              echo "### Built this cycle"
+              echo
+              sed 's/^/- /' /tmp/fresh.txt
+              echo
+            fi
 
-          # Build workflow table dynamically from packages.json
-          PKGS_JSON=".github/pages/packages.json"
-          WF_TABLE=""
-          while IFS= read -r row; do
-            ID=$(echo "$row"    | jq -r '.id')
-            LABEL=$(echo "$row" | jq -r '.label')
-            WF=$(echo "$row"    | jq -r '.workflow')
-            WF_TABLE="${WF_TABLE}| ${WF} | ${LABEL} |\n"
-          done < <(jq -c '.packages[] | select(.central_release == true)' "$PKGS_JSON")
+            if [ -s /tmp/carried.txt ]; then
+              echo "### Carried forward from a previous release"
+              echo
+              echo "These did not produce a fresh build this cycle, so the last"
+              echo "known-good binary is republished here unchanged:"
+              echo
+              sed 's/^/- /' /tmp/carried.txt
+              echo
+            fi
 
-          cat << EOF > release_notes.md
-          ## RISC-V Binaries — $RELEASE_DATE
+            if [ -s /tmp/absent.txt ]; then
+              echo "### Not available"
+              echo
+              echo "No successful build and no previous release to fall back on:"
+              echo
+              sed 's/^/- /' /tmp/absent.txt
+              echo
+            fi
 
-          Central release bundling the latest successful builds from all RISC-V build workflows.
-
-          ### Included Artifacts
-          $(echo -e "$ARTIFACT_DETAILS")
-
-          ### Build Status
-          $STATUS_LINE
-
-          ### Workflows
-          | Workflow | Package |
-          |----------|---------|
-          $(echo -e "$WF_TABLE")
-
-          ---
-          *Generated automatically by the Central Release workflow.*
-          EOF
+            echo "---"
+            echo "*Generated automatically by the Central Release workflow.*"
+          } > release_notes.md
 
           cat release_notes.md
 
       - name: Create GitHub release
+        if: ${{ !inputs.dry_run }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ steps.date.outputs.release_date }}
           name: RISC-V Release ${{ steps.date.outputs.release_date }}
           body_path: release_notes.md
           files: release_assets/*
+          fail_on_unmatched_files: true
           make_latest: true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Central Release ${{ steps.date.outputs.release_date }}"
+            echo
+            echo "- Assets published: **${{ steps.verify.outputs.asset_count }}**"
+            echo "- Built this cycle: ${{ steps.verify.outputs.fresh_count }}"
+            echo "- Carried forward: ${{ steps.verify.outputs.carried_count }}"
+            echo "- Unavailable: ${{ steps.verify.outputs.absent_count }}"
+            if [ -s /tmp/absent.txt ]; then
+              echo
+              echo "**Needs attention** — never successfully built:"
+              sed 's/^/- /' /tmp/absent.txt
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

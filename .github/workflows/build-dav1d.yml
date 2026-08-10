@@ -1,0 +1,74 @@
+# Overlay for dav1d. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   dav1d ships source only, for every architecture. The riscv64 win is not
+#   just freshness: Ubuntu 24.04 carries dav1d 1.4.1, whose src/riscv/64/
+#   contains exactly one assembly file (itx.S — inverse transforms). Upstream
+#   1.5.x adds cdef, ipred, mc, mc16, pal and filmgrain RVV assembly, i.e. the
+#   motion-compensation path that dominates AV1 decode time.
+name: Build dav1d for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 08 4 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: dav1d RISC-V
+      timeout-minutes: 60
+      apt-packages: build-essential git meson ninja-build nasm pkg-config file
+      build-script: |
+        set -eux
+        DAV1D_REPO="https://code.videolan.org/videolan/dav1d.git"
+
+        # Resolve the newest stable tag straight from the remote — no API
+        # dependency, and it ignores rc/pre tags by construction.
+        VERSION=$(git ls-remote --tags --refs "$DAV1D_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sort -V | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not resolve a dav1d tag" >&2; exit 1; }
+        echo "Latest dav1d: $VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/dav1d-src"
+        git clone --depth=1 --branch "$VERSION" "$DAV1D_REPO" \
+          "$GITHUB_WORKSPACE/dav1d-src"
+        cd "$GITHUB_WORKSPACE/dav1d-src"
+
+        PREFIX="$GITHUB_WORKSPACE/dav1d-install"
+        rm -rf "$PREFIX"
+
+        # No -march here on purpose. dav1d gates its RVV assembly behind
+        # `.option arch, +v` plus runtime detection, so a generic build runs
+        # on both RVV-1.0 parts and on T-Head XTheadVector boards
+        # (JH7110/VisionFive 2). Baking in rv64gcv would SIGILL on the latter.
+        meson setup build \
+          --prefix="$PREFIX" \
+          --buildtype=release \
+          --default-library=both
+        ninja -C build
+        ninja -C build install
+
+        # Confirm the RVV assembly was actually assembled in, rather than
+        # silently skipped by an assembler too old for `.option arch, +v`.
+        if ! grep -qi "riscv" build/meson-logs/meson-log.txt; then
+          echo "::warning::no riscv mention in meson log — check RVV asm was enabled"
+        fi
+
+        "$PREFIX/bin/dav1d" --version
+        file "$PREFIX/bin/dav1d" | grep -q "RISC-V" \
+          || { echo "dav1d is not a RISC-V binary" >&2; exit 1; }
+
+        ASSET_NAME="dav1d-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

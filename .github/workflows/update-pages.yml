@@ -447,7 +447,8 @@ jobs:
                       echo "crictl pull ghcr.io/cloud-v-10xe/pause:latest"
                       printf '\n<span class="comment"># Networking (etcd, CoreDNS):</span>\n'
                       echo "crictl pull docker.io/cloudv10x/etcd:latest"
-                      echo "crictl pull docker.io/cloudv10x/coredns:latest"
+                      printf '<span class="comment"># CoreDNS ships riscv64 upstream, so pull it straight from the project:</span>\n'
+                      echo "crictl pull docker.io/coredns/coredns:latest"
                       printf '\n<span class="comment"># ── Step 4: Configure containerd to use our pause image ──</span>\n'
                       printf '<span class="comment"># Edit /etc/containerd/config.toml and set:</span>\n'
                       printf '<span class="comment">#   sandbox_image = "ghcr.io/cloud-v-10xe/pause:latest"</span>\n'

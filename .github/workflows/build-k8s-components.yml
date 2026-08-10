@@ -8,7 +8,7 @@ on:
         required: false
         default: 'latest'
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 23 * *"
 
 jobs:
   get-versions:
@@ -122,7 +122,21 @@ jobs:
 
       - name: Setup Go
         run: |
-          sudo apt update && sudo apt install -y golang
+          set -eu
+          # Ubuntu's riscv64 `golang` (1.22) hits runtime scheduler crashes on
+          # riscv64; take a current toolchain from go.dev, with a pinned
+          # fallback if the download index is unreachable.
+          GO_VER=$(curl -fsSL --retry 3 'https://go.dev/dl/?mode=json' 2>/dev/null \
+            | grep -o '"version"[[:space:]]*:[[:space:]]*"go[0-9.]*"' | head -n1 \
+            | grep -o 'go[0-9.]*' || true)
+          [ -n "$GO_VER" ] || GO_VER="go1.24.6"
+          curl -fsSL --retry 3 --retry-delay 10 -o /tmp/go.tar.gz \
+            "https://go.dev/dl/${GO_VER}.linux-riscv64.tar.gz"
+          sudo apt-get remove -y golang golang-go 2>/dev/null || true
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+          /usr/local/go/bin/go version
 
       - name: Clean workspace with elevated permissions
         run: |

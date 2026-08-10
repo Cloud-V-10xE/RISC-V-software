@@ -1,0 +1,78 @@
+# Overlay for x265. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   x265 gained a full RISC-V RVV backend in release 4.2 (April 2026),
+#   contributed by Sanechips/ZTE — source/common/riscv64/ holds ~23 files
+#   covering dct, sad, satd/sa8d, intrapred, filters, loopfilter and SAO.
+#   Tags 4.0 and 4.1 have no riscv64 directory at all.
+#
+#   Ubuntu 24.04 ships x265 3.5, which was tagged in March 2021 and contains
+#   zero RISC-V code. Even Debian trixie's 4.1 predates the backend. Upstream
+#   publishes no binaries for any architecture.
+name: Build x265 for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 08 6 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: x265 RISC-V
+      timeout-minutes: 90
+      apt-packages: build-essential git cmake ninja-build pkg-config file
+      build-script: |
+        set -eux
+        X265_REPO="https://bitbucket.org/multicoreware/x265_git.git"
+
+        VERSION=$(git ls-remote --tags --refs "$X265_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^[0-9]+\.[0-9]+$' \
+          | sort -V | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not resolve an x265 tag" >&2; exit 1; }
+        echo "Latest x265: $VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/x265-src"
+        git clone --depth=1 --branch "$VERSION" "$X265_REPO" \
+          "$GITHUB_WORKSPACE/x265-src"
+        cd "$GITHUB_WORKSPACE/x265-src"
+
+        # Fail loudly if we somehow landed on a tag without the RVV backend,
+        # rather than silently shipping a scalar build that looks fine.
+        [ -d source/common/riscv64 ] \
+          || { echo "::error::x265 $VERSION has no source/common/riscv64 — RVV backend absent"; exit 1; }
+        echo "riscv64 asm files: $(ls source/common/riscv64 | wc -l)"
+
+        PREFIX="$GITHUB_WORKSPACE/x265-install"
+        rm -rf "$PREFIX" build
+        mkdir -p build && cd build
+
+        # ENABLE_RVV and RISCV64_RUNTIME_CPU_DETECT both default to ON, and
+        # x265 confines -march=rv64gcv to the intrinsic translation units only,
+        # so the resulting binary stays portable to non-vector boards.
+        cmake ../source -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+          -DENABLE_SHARED=ON \
+          -DENABLE_RVV=ON \
+          -DRISCV64_RUNTIME_CPU_DETECT=ON
+        ninja
+        ninja install
+
+        export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+        "$PREFIX/bin/x265" --version
+        file "$PREFIX/bin/x265" | grep -q "RISC-V" \
+          || { echo "x265 is not a RISC-V binary" >&2; exit 1; }
+
+        ASSET_NAME="x265-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

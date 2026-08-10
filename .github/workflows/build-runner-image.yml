@@ -1,0 +1,224 @@
+name: Build GitHub Actions Runner Image for RISC-V
+
+# Publishes self-hosted GitHub Actions runner images for linux/riscv64 to
+# Docker Hub, built around the riscv64 runner binary from
+# https://github.com/Cloud-V-10xE/github-runner-riscv/releases
+#
+# The image is only rebuilt when that repository cuts a new release. The check
+# runs daily on a free x86 runner and compares the upstream version against the
+# tags already on Docker Hub; the scarce riscv64 runner is only used when there
+# is actually something new to build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild even if this runner version is already on Docker Hub'
+        required: false
+        type: boolean
+        default: false
+      runner_version:
+        description: 'Pin a specific runner version (e.g. 2.336.0). Leave blank for latest.'
+        required: false
+        type: string
+  schedule:
+    # Daily. Cheap: this only costs an API call unless a new release exists.
+    - cron: "0 05 * * *"
+
+concurrency:
+  group: runner-image
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check for a new runner release
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      version: ${{ steps.resolve.outputs.version }}
+      asset_url: ${{ steps.resolve.outputs.asset_url }}
+    steps:
+      - name: Resolve latest riscv64 runner release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SRC_REPO="Cloud-V-10xE/github-runner-riscv"
+          PINNED="${{ inputs.runner_version }}"
+
+          if [ -n "$PINNED" ]; then
+            # Find the release whose asset matches the pinned version.
+            REL=$(gh api "repos/$SRC_REPO/releases" --paginate \
+              --jq "[.[] | select(.prerelease==false)
+                     | select([.assets[].name] | any(test(\"$PINNED\")))] | first")
+          else
+            REL=$(gh api "repos/$SRC_REPO/releases" \
+              --jq '[.[] | select(.prerelease==false)] | first')
+          fi
+
+          [ -n "$REL" ] && [ "$REL" != "null" ] \
+            || { echo "::error::No matching release in $SRC_REPO"; exit 1; }
+
+          TAG=$(echo "$REL" | jq -r '.tag_name')
+
+          # Take the version from the ASSET name, not the tag. Tags look like
+          # "v2.336.0-riscv64-net8" and that suffix is not guaranteed stable,
+          # whereas the asset is always actions-runner-linux-riscv64-X.Y.Z.tar.gz
+          ASSET_NAME=$(echo "$REL" | jq -r \
+            '[.assets[].name | select(test("actions-runner-linux-riscv64-.*\\.tar\\.gz$"))] | first')
+          ASSET_URL=$(echo "$REL" | jq -r \
+            '[.assets[] | select(.name | test("actions-runner-linux-riscv64-.*\\.tar\\.gz$"))
+              | .browser_download_url] | first')
+
+          [ -n "$ASSET_NAME" ] && [ "$ASSET_NAME" != "null" ] \
+            || { echo "::error::Release $TAG has no riscv64 runner tarball"; exit 1; }
+
+          VERSION=$(echo "$ASSET_NAME" \
+            | sed -E 's/^actions-runner-linux-riscv64-(.+)\.tar\.gz$/\1/')
+
+          echo "tag=$TAG"
+          echo "version=$VERSION"
+          echo "asset=$ASSET_NAME"
+
+          {
+            echo "version=$VERSION"
+            echo "asset_url=$ASSET_URL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.resolve.outputs.version }}"
+
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "force requested"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Query Docker Hub through docker login so this works whether the
+          # repository is public or private. The username is referenced only
+          # inside this step — never emitted as a job output, because Actions
+          # silently drops outputs whose value matches a secret.
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" \
+            | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
+          if docker manifest inspect "${IMAGE}:ubuntu-${VERSION}" >/dev/null 2>&1; then
+            echo "runner $VERSION is already published — nothing to do"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "runner $VERSION is not on Docker Hub yet — building"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "### Runner image check"
+            echo
+            echo "- Latest riscv64 runner: **${{ steps.resolve.outputs.version }}**"
+            echo "- Build needed: **${{ steps.decide.outputs.should_build }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and push runner images
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04-riscv
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      # Sequential: these share one riscv64 runner and each does its own
+      # apt-get + installdependencies.sh. Racing them just thrashes the box.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - variant: unprivileged
+            base: ubuntu
+            dockerfile: Dockerfile.ubuntu
+            tag: ubuntu
+            extra_tag: latest
+          - variant: unprivileged
+            base: debian
+            dockerfile: Dockerfile.debian
+            tag: debian
+            extra_tag: ''
+          - variant: docker-in-docker
+            base: ubuntu
+            dockerfile: Dockerfile.ubuntu
+            tag: docker-ubuntu
+            extra_tag: docker-latest
+          - variant: docker-in-docker
+            base: debian
+            dockerfile: Dockerfile.debian
+            tag: docker-debian
+            extra_tag: ''
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" \
+            | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build ${{ matrix.variant }} / ${{ matrix.base }}
+        run: |
+          set -eux
+          VERSION="${{ needs.check.outputs.version }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
+
+          docker build \
+            -f "runner-image/${{ matrix.variant }}/${{ matrix.dockerfile }}" \
+            --build-arg "RUNNER_VERSION=${VERSION}" \
+            --build-arg "RUNNER_URL=${{ needs.check.outputs.asset_url }}" \
+            -t "${IMAGE}:${{ matrix.tag }}-${VERSION}" \
+            "runner-image/${{ matrix.variant }}"
+
+      - name: Verify the image actually contains a working runner
+        run: |
+          set -eux
+          VERSION="${{ needs.check.outputs.version }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
+          REF="${IMAGE}:${{ matrix.tag }}-${VERSION}"
+
+          # config.sh --help exits non-zero by design, so check for the binary
+          # and the version file rather than trusting an exit code.
+          docker run --rm --entrypoint /bin/bash "$REF" -c '
+            set -e
+            test -f /home/runner/config.sh || { echo "config.sh missing"; exit 1; }
+            test -f /home/runner/run.sh    || { echo "run.sh missing"; exit 1; }
+            echo "runner version file: $(cat /home/runner/.runner_version 2>/dev/null || echo n/a)"
+            file /home/runner/bin/Runner.Listener 2>/dev/null | grep -qi "RISC-V" \
+              || echo "note: could not confirm RISC-V ELF via file(1)"
+          '
+
+      - name: Push ${{ matrix.tag }}-${{ needs.check.outputs.version }}
+        run: |
+          set -eux
+          VERSION="${{ needs.check.outputs.version }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
+
+          docker push "${IMAGE}:${{ matrix.tag }}-${VERSION}"
+
+          if [ -n "${{ matrix.extra_tag }}" ]; then
+            docker tag "${IMAGE}:${{ matrix.tag }}-${VERSION}" \
+                       "${IMAGE}:${{ matrix.extra_tag }}"
+            docker push "${IMAGE}:${{ matrix.extra_tag }}"
+          fi
+
+      - name: Clean up local images
+        if: always()
+        run: |
+          VERSION="${{ needs.check.outputs.version }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/github-actions-riscv"
+          docker rmi -f "${IMAGE}:${{ matrix.tag }}-${VERSION}" 2>/dev/null || true
+          if [ -n "${{ matrix.extra_tag }}" ]; then
+            docker rmi -f "${IMAGE}:${{ matrix.extra_tag }}" 2>/dev/null || true
+          fi
+          docker image prune -f 2>/dev/null || true

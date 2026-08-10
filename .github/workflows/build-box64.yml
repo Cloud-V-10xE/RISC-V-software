@@ -1,0 +1,73 @@
+# Overlay for box64. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   box64 is how RISC-V users run x86-64 Linux binaries at all — the answer to
+#   "this proprietary tool has no RISC-V build". It is the most RISC-V-specific
+#   package in this archive.
+#
+#   Upstream publishes NO host binary for any architecture: the v0.4.x releases
+#   contain only bundles of x86 *libraries*, not box64 itself. Ubuntu 24.04 has
+#   no box64 package at all, and Debian trixie carries 0.3.4 against upstream
+#   0.4.x — which matters more than usual here, because PLCT Lab's RVV 1.0
+#   work (100+ SSE instructions translated to RVV, reported ~300% gain over
+#   scalar) landed in the 0.4 series.
+name: Build box64 for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 02 10 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: box64 RISC-V
+      timeout-minutes: 90
+      apt-packages: build-essential git cmake ninja-build python3 file
+      build-script: |
+        set -eux
+        BOX64_REPO="https://github.com/ptitSeb/box64.git"
+
+        VERSION=$(git ls-remote --tags --refs "$BOX64_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sed 's/^v//' \
+          | sort -V | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not resolve a box64 tag" >&2; exit 1; }
+        echo "Latest box64: $VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/box64-src"
+        git clone --depth=1 --branch "v${VERSION}" "$BOX64_REPO" \
+          "$GITHUB_WORKSPACE/box64-src"
+        cd "$GITHUB_WORKSPACE/box64-src"
+
+        PREFIX="$GITHUB_WORKSPACE/box64-install"
+        rm -rf "$PREFIX" build
+        mkdir -p build && cd build
+
+        # RV64=1 selects the RISC-V dynarec. Box32 (32-bit x86 support) is
+        # bundled and off by default; RISC-V needs Box32 rather than the
+        # separate box86 project, so enable it here.
+        cmake .. -G Ninja \
+          -DRV64=1 \
+          -DBOX32=1 \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DCMAKE_INSTALL_PREFIX="$PREFIX"
+        ninja
+        ninja install
+
+        "$PREFIX/bin/box64" --version 2>&1 | head -5 || true
+        file "$PREFIX/bin/box64" | grep -q "RISC-V" \
+          || { echo "box64 is not a RISC-V binary" >&2; exit 1; }
+
+        ASSET_NAME="box64-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

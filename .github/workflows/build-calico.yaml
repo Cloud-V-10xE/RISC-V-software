@@ -3,10 +3,11 @@ name: Build Calico for RISC-V
 
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
+  # `push: tags: ['v*']` was removed: any v* tag landing in this repo (they are
+  # not Calico versions) started an unrelated 3h Calico build. Scheduled and
+  # manual runs are the only ones that make sense here.
   schedule:
-    - cron: "0 0 * * 0"   # weekly — calico cuts releases often, adjust as needed
+    - cron: "0 02 24 * *"
 
 jobs:
   build:
@@ -18,9 +19,11 @@ jobs:
       package-name: Calico RISC-V
       # runner: RISCV64
       apt-packages: >-
-        build-essential golang clang llvm libbpf-dev libnftnl-dev
+        build-essential clang llvm libbpf-dev libnftnl-dev
         iptables libxtables-dev libiptc-dev pkg-config
         libpcap-dev libelf-dev linux-libc-dev
+      go-version: latest
+      timeout-minutes: 180
       build-script: |
         set -eux
         git config --global http.postBuffer 524288000

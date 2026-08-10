@@ -1,0 +1,111 @@
+# Overlay for Docker Engine. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   download.docker.com has no riscv64 directory at all — the static-binary
+#   tree carries aarch64, armel, armhf, ppc64le, s390x and x86_64 only, and
+#   the apt repo for noble is amd64/arm64/armhf/ppc64el/s390x. moby/moby's
+#   GitHub releases carry zero assets.
+#
+#   Ubuntu 24.04 riscv64 is stuck on docker.io 24.0.7 against upstream 29.x,
+#   and ships no docker-compose-plugin or docker-buildx-plugin for riscv64.
+#
+#   Scope note: compose, buildx, buildkit and nerdctl ALREADY publish riscv64
+#   binaries upstream, so this workflow deliberately builds only the pieces
+#   that are genuinely missing — dockerd, the docker CLI, and docker-proxy.
+name: Build Docker Engine for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 02 14 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Docker Engine RISC-V
+      timeout-minutes: 180
+      apt-packages: >-
+        build-essential git ca-certificates pkg-config file
+        libseccomp-dev libbtrfs-dev libdevmapper-dev
+      go-version: latest
+      build-script: |
+        set -eux
+        PREFIX="$GITHUB_WORKSPACE/docker-install"
+        rm -rf "$PREFIX"
+        mkdir -p "$PREFIX/bin"
+
+        # ---- moby (dockerd + docker-proxy) ----------------------------------
+        MOBY_REPO="https://github.com/moby/moby.git"
+        # moby tags engine releases as vXX.Y.Z; the "docker-vXX.Y.Z" tags are
+        # the release-bundle markers. Take the plain semver ones.
+        ENGINE_VERSION=$(git ls-remote --tags --refs "$MOBY_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sed 's/^v//' \
+          | sort -V | tail -n1)
+        [ -n "$ENGINE_VERSION" ] || { echo "Could not resolve a moby tag" >&2; exit 1; }
+        echo "Docker Engine: $ENGINE_VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/moby-src"
+        git clone --depth=1 --branch "v${ENGINE_VERSION}" "$MOBY_REPO" \
+          "$GITHUB_WORKSPACE/moby-src"
+        cd "$GITHUB_WORKSPACE/moby-src"
+
+        MOBY_REV=$(git rev-parse --short HEAD)
+        MOBY_LDFLAGS="-X github.com/docker/docker/dockerversion.Version=${ENGINE_VERSION} \
+          -X github.com/docker/docker/dockerversion.GitCommit=${MOBY_REV} \
+          -X github.com/docker/docker/dockerversion.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        # seccomp/apparmor/journald match what the official static builds use.
+        CGO_ENABLED=1 go build -trimpath \
+          -tags "seccomp apparmor journald exclude_graphdriver_devicemapper" \
+          -ldflags "$MOBY_LDFLAGS" \
+          -o "$PREFIX/bin/dockerd" ./cmd/dockerd
+
+        CGO_ENABLED=0 go build -trimpath \
+          -ldflags "-s -w" \
+          -o "$PREFIX/bin/docker-proxy" ./cmd/docker-proxy
+
+        # ---- docker/cli (the `docker` command) ------------------------------
+        CLI_REPO="https://github.com/docker/cli.git"
+        CLI_VERSION=$(git ls-remote --tags --refs "$CLI_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sed 's/^v//' \
+          | sort -V | tail -n1)
+        [ -n "$CLI_VERSION" ] || { echo "Could not resolve a docker/cli tag" >&2; exit 1; }
+        echo "Docker CLI: $CLI_VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/cli-src"
+        git clone --depth=1 --branch "v${CLI_VERSION}" "$CLI_REPO" \
+          "$GITHUB_WORKSPACE/cli-src"
+        cd "$GITHUB_WORKSPACE/cli-src"
+
+        CLI_REV=$(git rev-parse --short HEAD)
+        CGO_ENABLED=0 go build -trimpath \
+          -ldflags "-s -w \
+            -X github.com/docker/cli/cli/version.Version=${CLI_VERSION} \
+            -X github.com/docker/cli/cli/version.GitCommit=${CLI_REV} \
+            -X github.com/docker/cli/cli/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o "$PREFIX/bin/docker" ./cmd/docker
+
+        # ---- verify ---------------------------------------------------------
+        for b in dockerd docker docker-proxy; do
+          file "$PREFIX/bin/$b"
+          file "$PREFIX/bin/$b" | grep -q "RISC-V" \
+            || { echo "$b is not a RISC-V binary" >&2; exit 1; }
+        done
+        "$PREFIX/bin/docker" --version
+        "$PREFIX/bin/dockerd" --version
+
+        ASSET_NAME="docker-${ENGINE_VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

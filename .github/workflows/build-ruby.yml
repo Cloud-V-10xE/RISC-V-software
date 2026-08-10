@@ -4,7 +4,7 @@ name: Build Ruby for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 8 * *"
 
 jobs:
   build:
@@ -14,55 +14,47 @@ jobs:
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: Ruby RISC-V
+      timeout-minutes: 180
       apt-packages: >-
         build-essential git wget jq libssl-dev libreadline-dev zlib1g-dev
         libyaml-dev libgdbm-dev libncurses5-dev libffi-dev autoconf bison ruby
       build-script: |
         set -eux
-        LATEST=$(curl -s https://api.github.com/repos/ruby/ruby/releases \
-          | jq -r '[.[] | select(.prerelease == false)] | .[0].tag_name')
-        # Ruby tags look like v3_4_1 — convert to v3.4.1
-        TAG_DOT=$(echo "$LATEST" | sed 's/_/./g')
-        VERSION="${TAG_DOT#v}"
+        # Build from the official release tarball, not a git checkout.
+        #
+        # A git build has to fetch the bundled gems through tool/downloader.rb.
+        # The previous script stubbed that file out to avoid the network, but
+        # the stub never defined the `Downloader` constant defs/gmake.mk calls
+        # into, so every build died with "uninitialized constant Downloader".
+        # Release tarballs already contain the gems *and* a pre-generated
+        # configure, so the whole problem disappears.
+        INDEX=$(curl -fsSL --retry 3 --retry-delay 5 \
+          https://cache.ruby-lang.org/pub/ruby/index.txt)
+        VERSION=$(echo "$INDEX" \
+          | grep -oE 'ruby-[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' \
+          | sed -E 's/^ruby-(.*)\.tar\.gz$/\1/' \
+          | sort -V | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not determine latest Ruby version" >&2; exit 1; }
         echo "Latest Ruby: $VERSION"
 
-        git clone --depth=1 \
-          --branch "$LATEST" \
-          https://github.com/ruby/ruby.git \
-          "$GITHUB_WORKSPACE/ruby-src"
+        MAJMIN=$(echo "$VERSION" | cut -d. -f1,2)
+        curl -fL --retry 3 --retry-delay 10 \
+          -o "$GITHUB_WORKSPACE/ruby.tar.gz" \
+          "https://cache.ruby-lang.org/pub/ruby/${MAJMIN}/ruby-${VERSION}.tar.gz"
+
+        rm -rf "$GITHUB_WORKSPACE/ruby-src"
+        mkdir -p "$GITHUB_WORKSPACE/ruby-src"
+        tar -xzf "$GITHUB_WORKSPACE/ruby.tar.gz" \
+          -C "$GITHUB_WORKSPACE/ruby-src" --strip-components=1
 
         cd "$GITHUB_WORKSPACE/ruby-src"
-        autoreconf -fi
         ./configure \
           --prefix="$GITHUB_WORKSPACE/ruby-install" \
           --enable-shared \
           --disable-install-doc \
-          --with-baseruby=$(which ruby)
+          --with-baseruby="$(which ruby)"
 
-        # Replace downloader.rb with a stub that creates empty placeholder
-        # files instead of downloading from rubygems.org (unreachable on the
-        # self-hosted runner). Written via base64 to avoid YAML quoting issues.
-        printf '%s' \
-          'require "fileutils"
-        dir = "."
-        i = 0
-        while i < ARGV.length
-          if ARGV[i] == "-d" && ARGV[i+1]
-            dir = ARGV[i+1]; i += 2
-          else
-            i += 1
-          end
-        end
-        ARGV.each do |arg|
-          next if arg.start_with?("-")
-          gem_file = File.join(dir, arg.end_with?(".gem") ? arg : "#{arg}.gem")
-          FileUtils.mkdir_p(File.dirname(gem_file))
-          FileUtils.touch(gem_file)
-        end
-        ' > tool/downloader.rb
-
-        mkdir -p gems
-        make -j$(nproc)
+        make -j"$(nproc)"
         make install
 
         "$GITHUB_WORKSPACE/ruby-install/bin/ruby" --version

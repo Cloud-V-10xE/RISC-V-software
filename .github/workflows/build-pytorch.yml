@@ -3,11 +3,15 @@ name: Build PyTorch for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"  # Weekly on Sunday at midnight
+    - cron: "0 02 15 * *"
 
 jobs:
   build:
-    runs-on: RISCV64
+    # Was "RISCV64" — a label with no runners attached any more, so this job
+    # sat in the queue until GitHub killed it at "24h0m0s awaiting a runner".
+    # Every other workflow in the repo uses this label.
+    runs-on: ubuntu-24.04-riscv
+    timeout-minutes: 1080
     permissions:
       contents: write
     outputs:
@@ -99,6 +103,7 @@ jobs:
             sympy
       - name: Configure build environment
         run: |
+          set -eux
           # Export build configuration for RISC-V CPU-only
           cat >> $GITHUB_ENV << 'EOF'
           USE_CUDA=0
@@ -119,8 +124,26 @@ jobs:
           USE_SYSTEM_BLAS=1
           USE_SYSTEM_LAPACK=1
           CMAKE_BUILD_TYPE=Release
-          MAX_JOBS=64
           EOF
+
+          # MAX_JOBS was hard-coded to 64. Several of PyTorch's translation
+          # units peak around 2GB each, so 64 concurrent compilers is a
+          # reliable way to OOM the box — and an OOM-killed runner surfaces as
+          # the "self-hosted runner lost communication" failure, not as a build
+          # error. Cap on whichever of cores/RAM is scarcer.
+          CORES=$(nproc)
+          RAM_GB=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
+          JOBS=$(( RAM_GB / 2 ))
+          [ "$JOBS" -lt 1 ] && JOBS=1
+          [ "$JOBS" -gt "$CORES" ] && JOBS="$CORES"
+          echo "cores=$CORES ram=${RAM_GB}G -> MAX_JOBS=$JOBS"
+          echo "MAX_JOBS=$JOBS" >> "$GITHUB_ENV"
+
+          # ccache is installed above but was never enabled. Keep it in $HOME
+          # so it survives between monthly runs.
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          ccache -M 20G
+          ccache -z
       - name: Build PyTorch
         run: |
           source $GITHUB_WORKSPACE/pytorch-build-env/bin/activate
@@ -180,18 +203,14 @@ jobs:
           name: build-log-${{ steps.get-version.outputs.pytorch_version }}
           path: ${{ github.workspace }}/build.log
 
-      - name: Create or push to tag
-        run: |
-          TAG=${{ steps.get-latest-tag.outputs.tag_name }}
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "✅ Tag $TAG already exists. Skipping tag creation." 
-          else
-            echo "🆕 Tag $TAG does not exist. Creating and pushing..."
-            git tag "$TAG"
-            git push origin "$TAG"
-          fi
+      # NOTE: this job used to push an upstream-named tag (e.g. "v2.9.0") into
+      # this repository. Three unrelated workflows subscribe to `push: tags:
+      # v*` — build-calico, docker.yml and goreleaser.yml — so every PyTorch
+      # build silently kicked off a Calico build and two leftover template
+      # jobs, competing for the same scarce riscv64 runners. This repo's own
+      # releases are tagged release-YYYY-MM-DD by central-release.yml, so the
+      # upstream tag served no purpose here and the step has been removed.
+
       - name: Generate release notes
         id: release-notes
         run: |

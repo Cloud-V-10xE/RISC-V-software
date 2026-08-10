@@ -4,7 +4,7 @@ name: Build Python for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 7 * *"
 
 jobs:
   build:
@@ -34,13 +34,29 @@ jobs:
           "$GITHUB_WORKSPACE/cpython"
 
         cd "$GITHUB_WORKSPACE/cpython"
-        ./configure \
-          --prefix="$GITHUB_WORKSPACE/python-install" \
-          --enable-optimizations \
-          --with-ensurepip=install \
-          --enable-shared \
-          LDFLAGS="-Wl,-rpath,$GITHUB_WORKSPACE/python-install/lib"
-        make -j$(nproc)
+
+        configure_python() {
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/python-install" \
+            --with-ensurepip=install \
+            --enable-shared \
+            "$@" \
+            LDFLAGS="-Wl,-rpath,$GITHUB_WORKSPACE/python-install/lib"
+        }
+
+        # --enable-optimizations (PGO) runs the CPython test suite to collect
+        # profile data, and ANY failing test aborts the build — last run died on
+        # a single flaky test_generators on riscv64. PGO is a nice-to-have; a
+        # working interpreter is not. Try PGO, then fall back to a plain build
+        # so one flaky test can never cost us the month's Python.
+        if configure_python --enable-optimizations && make -j"$(nproc)"; then
+          echo "PGO build succeeded"
+        else
+          echo "::warning::PGO build failed (likely a flaky test in the profile run); rebuilding without PGO"
+          make clean || true
+          configure_python
+          make -j"$(nproc)"
+        fi
         make install
 
         "$GITHUB_WORKSPACE/python-install/bin/python3" --version

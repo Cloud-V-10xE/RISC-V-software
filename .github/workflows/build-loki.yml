@@ -1,0 +1,110 @@
+# Overlay for Grafana Loki. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   Loki's own build system already targets riscv64 — crosscompile.mk lists
+#   linux/riscv64 in CROSS_BUILD_PLATFORMS, and PR grafana/loki#21597
+#   ("feat(ci): Include linux/riscv64 Loki build in releases") was merged in
+#   April 2026 after the maintainers agreed. The build goes green in their CI,
+#   but the artifact never reaches the published release: eight consecutive
+#   releases carry 47 assets each and none of them is riscv64.
+#
+#   There is also no distro fallback. The package named "loki" in Debian is
+#   version 2.4.7.4 — unrelated MCMC linkage-analysis software, not Grafana
+#   Loki (v3.x). So riscv64 users have nowhere to get this today.
+name: Build Loki for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 02 20 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Loki RISC-V
+      # Upstream measured ~29 min for a native riscv64 Loki build on a RISE
+      # runner; leave generous headroom for the extra binaries.
+      timeout-minutes: 180
+      apt-packages: build-essential git jq ca-certificates file
+      go-version: latest
+      build-script: |
+        set -eux
+        # Strict vX.Y.Z only — Loki also tags release candidates and the
+        # separate "vdev-*" tooling releases, neither of which we want.
+        LATEST=$(curl -fsSL --retry 3 \
+          https://api.github.com/repos/grafana/loki/releases \
+          | jq -r '[.[] | select(.prerelease == false) | .tag_name
+                   | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | first')
+        [ -n "$LATEST" ] && [ "$LATEST" != "null" ] \
+          || { echo "Could not resolve a stable Loki release" >&2; exit 1; }
+        VERSION="${LATEST#v}"
+        echo "Latest Loki: $LATEST"
+
+        rm -rf "$GITHUB_WORKSPACE/loki-src"
+        git clone --depth=1 --branch "$LATEST" \
+          https://github.com/grafana/loki.git "$GITHUB_WORKSPACE/loki-src"
+        cd "$GITHUB_WORKSPACE/loki-src"
+
+        REVISION=$(git rev-parse --short HEAD)
+        INSTALL="$GITHUB_WORKSPACE/loki-install"
+        rm -rf "$INSTALL"
+        mkdir -p "$INSTALL/bin"
+
+        # Stamp the same build metadata Loki's own Makefile injects, so
+        # `loki -version` reports something truthful instead of "unknown".
+        # Read the module path from go.mod rather than hardcoding /v3 — the
+        # major version suffix changes across releases.
+        MODULE=$(awk '/^module /{print $2; exit}' go.mod)
+        VPREFIX="${MODULE}/pkg/util/build"
+        LDFLAGS="-s -w \
+          -X ${VPREFIX}.Version=${VERSION} \
+          -X ${VPREFIX}.Revision=${REVISION} \
+          -X ${VPREFIX}.Branch=${LATEST} \
+          -X ${VPREFIX}.BuildUser=cloud-v \
+          -X ${VPREFIX}.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        # Build the main packages directly rather than via `make`: the Makefile
+        # targets pull in protoc//mixin tooling we do not need just to produce
+        # binaries. CGO stays off so the result is a static, portable artifact.
+        build_binary() {
+          local out="$1" pkg="$2"
+          if [ -d "$pkg" ]; then
+            echo "Building $out from $pkg"
+            CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" \
+              -o "$INSTALL/bin/$out" "$pkg"
+          else
+            echo "Skipping $out: $pkg not present in $LATEST" >&2
+          fi
+        }
+
+        build_binary loki         ./cmd/loki
+        build_binary logcli       ./cmd/logcli
+        build_binary loki-canary  ./cmd/loki-canary
+        # promtail moved under clients/ and is being superseded by Alloy;
+        # build it only while it still exists upstream.
+        build_binary promtail     ./clients/cmd/promtail
+
+        # A silent no-op would otherwise ship an empty tarball.
+        [ -n "$(ls -A "$INSTALL/bin")" ] \
+          || { echo "no Loki binaries were produced" >&2; exit 1; }
+
+        # Confirm we actually produced riscv64 ELFs, not something the Go
+        # toolchain cross-built for the wrong target.
+        for b in "$INSTALL/bin"/*; do
+          file "$b"
+          file "$b" | grep -q "RISC-V" \
+            || { echo "$b is not a RISC-V binary" >&2; exit 1; }
+        done
+        "$INSTALL/bin/loki" -version
+
+        ASSET_NAME="loki-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$INSTALL" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

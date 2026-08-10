@@ -1,0 +1,67 @@
+# Overlay for OpenTofu. Common scaffolding lives in _build-package.yaml.
+#
+# Why this package exists here:
+#   OpenTofu's v1.x releases ship linux 386/amd64/arm/arm64 and nothing else —
+#   164 assets, no riscv64 — and it is packaged in neither Debian nor Ubuntu
+#   for any architecture. Pure Go, so the build is ~15 minutes.
+#
+#   OpenTofu rather than Terraform on purpose: Terraform is BUSL-licensed,
+#   which makes redistributing prebuilt binaries legally fraught. OpenTofu is
+#   MPL-2.0 and safe to republish. The same reasoning applies to OpenBao over
+#   Vault if a secrets manager is ever wanted here.
+name: Build OpenTofu for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 08 8 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: OpenTofu RISC-V
+      timeout-minutes: 60
+      apt-packages: build-essential git ca-certificates file
+      go-version: latest
+      build-script: |
+        set -eux
+        TOFU_REPO="https://github.com/opentofu/opentofu.git"
+
+        VERSION=$(git ls-remote --tags --refs "$TOFU_REPO" \
+          | awk -F/ '{print $NF}' \
+          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sed 's/^v//' \
+          | sort -V | tail -n1)
+        [ -n "$VERSION" ] || { echo "Could not resolve an OpenTofu tag" >&2; exit 1; }
+        echo "Latest OpenTofu: $VERSION"
+
+        rm -rf "$GITHUB_WORKSPACE/tofu-src"
+        git clone --depth=1 --branch "v${VERSION}" "$TOFU_REPO" \
+          "$GITHUB_WORKSPACE/tofu-src"
+        cd "$GITHUB_WORKSPACE/tofu-src"
+
+        PREFIX="$GITHUB_WORKSPACE/tofu-install"
+        rm -rf "$PREFIX"
+        mkdir -p "$PREFIX/bin"
+
+        # Stamp the version the same way upstream's goreleaser does, so
+        # `tofu version` does not report "dev".
+        CGO_ENABLED=0 go build -trimpath \
+          -ldflags "-s -w -X github.com/opentofu/opentofu/version.dev=no" \
+          -o "$PREFIX/bin/tofu" ./cmd/tofu
+
+        "$PREFIX/bin/tofu" version
+        file "$PREFIX/bin/tofu" | grep -q "RISC-V" \
+          || { echo "tofu is not a RISC-V binary" >&2; exit 1; }
+
+        ASSET_NAME="opentofu-${VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

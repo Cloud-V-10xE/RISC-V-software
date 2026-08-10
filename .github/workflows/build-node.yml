@@ -4,7 +4,7 @@ name: Build Nodejs for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 9 * *"
 
 jobs:
   build:
@@ -14,6 +14,9 @@ jobs:
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: Node.js RISC-V
+      # V8 alone is a multi-hour compile on riscv64; the 360-minute job default
+      # cut this off at 6h00m23s last cycle with the build still running.
+      timeout-minutes: 720
       apt-packages: >-
         libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential
         libcurl4-openssl-dev wget ccache python3 file
@@ -37,17 +40,31 @@ jobs:
         cd "$GITHUB_WORKSPACE/node"
 
         git fetch --tags --depth=1
-        LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n 1)
+        # Strict vX.Y.Z only — a bare "v*" also matches -rc / -nightly tags and
+        # we do not want to publish a release candidate as the month's Node.
+        LATEST_TAG=$(git tag -l "v*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+        [ -n "$LATEST_TAG" ] || { echo "No stable Node tag found" >&2; exit 1; }
         echo "Checking out $LATEST_TAG"
         git fetch --depth=1 origin tag "$LATEST_TAG"
         git checkout FETCH_HEAD
+
+        # ccache was already being installed but never wired up. Keep the cache
+        # outside $GITHUB_WORKSPACE so it survives the workspace wipe and gives
+        # the next monthly run a warm start.
+        export CCACHE_DIR="$HOME/.ccache"
+        export CC="ccache gcc-14"
+        export CXX="ccache g++-14"
+        ccache -M 15G
+        ccache -z
 
         ./configure \
           --prefix="$GITHUB_WORKSPACE/installed_binaries" \
           --openssl-no-asm \
           --dest-cpu=riscv64
-        make -j$(nproc)
+        make -j"$(nproc)"
         make install
+
+        ccache -s || true
 
         "$GITHUB_WORKSPACE/installed_binaries/bin/node" -v
         file "$GITHUB_WORKSPACE/installed_binaries/bin/node"

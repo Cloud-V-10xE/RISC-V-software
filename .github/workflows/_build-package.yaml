@@ -3,7 +3,8 @@
 # This file owns everything that every build-* workflow had in common:
 #   - the self-hosted runner (runs-on)
 #   - permissions
-#   - apt dependency installation
+#   - apt dependency installation (with retries)
+#   - optional modern Go toolchain from go.dev
 #   - workspace cleanup
 #   - repo checkout
 #   - artifact upload
@@ -20,7 +21,8 @@
 #   the final artifact location by appending two lines to $GITHUB_ENV:
 #       echo "ASSET_NAME=<file name>"  >> "$GITHUB_ENV"
 #       echo "ASSET_PATH=<abs path>"   >> "$GITHUB_ENV"
-#   Those are picked up by the Upload artifact step below.
+#   Those are picked up by the Upload artifact step below, which refuses to
+#   run if the file is missing or empty (see "Verify build output").
 
 name: Reusable RISC-V package build
 
@@ -36,10 +38,27 @@ on:
         required: false
         type: string
         default: ubuntu-24.04-riscv
+      timeout-minutes:
+        description: >-
+          Hard cap for the build job. GitHub kills jobs at 360 minutes;
+          staying under it lets us fail with readable logs instead of an
+          opaque "exceeded maximum execution time".
+        required: false
+        type: number
+        default: 350
       apt-packages:
         description: >-
           apt packages to install before building. Space- or newline-
           separated. Leave empty to skip apt installation entirely.
+        required: false
+        type: string
+        default: ""
+      go-version:
+        description: >-
+          Install a Go toolchain from go.dev instead of relying on apt's.
+          Use "latest" to track upstream stable, or pin e.g. "go1.24.6".
+          Ubuntu's riscv64 `golang` package is old enough to hit runtime
+          scheduler crashes on riscv64, so any Go build should set this.
         required: false
         type: string
         default: ""
@@ -76,17 +95,82 @@ jobs:
   build:
     name: Build ${{ inputs.package-name }}
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: write
       actions: write
+
+    # Never let a manual dispatch race the scheduled run of the same package.
+    # cancel-in-progress stays false: these builds take hours and a half-built
+    # package is worth less than a late one.
+    concurrency:
+      group: build-${{ inputs.package-name }}
+      cancel-in-progress: false
 
     steps:
       - name: Install apt dependencies
         if: inputs.apt-packages != ''
         run: |
+          set -eu
           export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update
-          sudo apt-get install -y ${{ inputs.apt-packages }}
+          # Mirrors for the riscv64 port are noticeably flakier than x86;
+          # a bare apt-get failing the whole build is the single most common
+          # transient failure we see, so retry both update and install.
+          for attempt in 1 2 3; do
+            if sudo apt-get update; then break; fi
+            echo "apt-get update failed (attempt $attempt), retrying in 30s..." >&2
+            sleep 30
+          done
+          for attempt in 1 2 3; do
+            if sudo apt-get install -y ${{ inputs.apt-packages }}; then
+              exit 0
+            fi
+            echo "apt-get install failed (attempt $attempt), retrying in 30s..." >&2
+            sleep 30
+          done
+          echo "apt-get install failed after 3 attempts" >&2
+          exit 1
+
+      - name: Install Go toolchain
+        if: inputs.go-version != ''
+        run: |
+          set -eu
+          REQUESTED="${{ inputs.go-version }}"
+          # Known-good pinned fallback: used if go.dev is unreachable or the
+          # index format changes. Keep this at a version verified on riscv64.
+          FALLBACK="go1.24.6"
+
+          GO_VER="$REQUESTED"
+          if [ "$REQUESTED" = "latest" ]; then
+            GO_VER=$(curl -fsSL --retry 3 --retry-delay 5 'https://go.dev/dl/?mode=json' 2>/dev/null \
+              | grep -o '"version"[[:space:]]*:[[:space:]]*"go[0-9.]*"' \
+              | head -n1 \
+              | grep -o 'go[0-9.]*' || true)
+            if [ -z "$GO_VER" ]; then
+              echo "Could not resolve latest Go version, falling back to $FALLBACK" >&2
+              GO_VER="$FALLBACK"
+            fi
+          fi
+          echo "Installing $GO_VER for riscv64"
+
+          TARBALL="${GO_VER}.linux-riscv64.tar.gz"
+          if ! curl -fsSL --retry 3 --retry-delay 10 -o "/tmp/${TARBALL}" \
+               "https://go.dev/dl/${TARBALL}"; then
+            echo "Download of $GO_VER failed, falling back to $FALLBACK" >&2
+            GO_VER="$FALLBACK"
+            TARBALL="${GO_VER}.linux-riscv64.tar.gz"
+            curl -fsSL --retry 3 --retry-delay 10 -o "/tmp/${TARBALL}" \
+              "https://go.dev/dl/${TARBALL}"
+          fi
+
+          # Remove apt's Go so a stale /usr/bin/go can't shadow ours.
+          sudo apt-get remove -y golang golang-go golang-doc 2>/dev/null || true
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf "/tmp/${TARBALL}"
+
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+          echo "GOROOT=/usr/local/go" >> "$GITHUB_ENV"
+          /usr/local/go/bin/go version
 
       - name: Clean workspace with elevated permissions
         if: inputs.clean-workspace
@@ -96,7 +180,7 @@ jobs:
 
       - name: Checkout repo
         if: inputs.checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           clean: false
 
@@ -107,11 +191,32 @@ jobs:
       - name: Build ${{ inputs.package-name }}
         run: ${{ inputs.build-script }}
 
+      # Without this, a build-script that exits 0 but never sets ASSET_PATH
+      # hands upload-artifact an empty name and fails with an unrelated error.
+      - name: Verify build output
+        run: |
+          set -eu
+          if [ -z "${ASSET_NAME:-}" ] || [ -z "${ASSET_PATH:-}" ]; then
+            echo "::error::build-script did not export ASSET_NAME/ASSET_PATH to \$GITHUB_ENV" >&2
+            exit 1
+          fi
+          if [ ! -f "$ASSET_PATH" ]; then
+            echo "::error::ASSET_PATH does not exist: $ASSET_PATH" >&2
+            exit 1
+          fi
+          if [ ! -s "$ASSET_PATH" ]; then
+            echo "::error::ASSET_PATH is empty: $ASSET_PATH" >&2
+            exit 1
+          fi
+          echo "Staged $ASSET_NAME ($(du -h "$ASSET_PATH" | cut -f1))"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ASSET_NAME }}
           path: ${{ env.ASSET_PATH }}
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Trigger Pages update
         if: success() && inputs.trigger-pages

@@ -4,7 +4,7 @@ name: Build GCC for RISC-V
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"
+    - cron: "0 02 13 * *"
 
 jobs:
   build:
@@ -14,7 +14,10 @@ jobs:
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: GCC RISC-V
-      apt-packages: build-essential libatomic1 flex bison
+      # Even with the trimmed configure below this is a multi-hour build, and
+      # the job default (360) killed it mid-link last cycle.
+      timeout-minutes: 600
+      apt-packages: build-essential libatomic1 flex bison libgmp-dev libmpfr-dev libmpc-dev
       setup-script: |
         set -eux
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
@@ -25,7 +28,9 @@ jobs:
         git config --global core.compression 0
 
         rm -rf "$GITHUB_WORKSPACE/gcc"
-        git clone --depth=1 --no-tags git://gcc.gnu.org/git/gcc.git "$GITHUB_WORKSPACE/gcc"
+        # git:// is unauthenticated and blocked on a lot of networks; https is
+        # the protocol gcc.gnu.org actually documents.
+        git clone --depth=1 --no-tags https://gcc.gnu.org/git/gcc.git "$GITHUB_WORKSPACE/gcc"
         cd "$GITHUB_WORKSPACE/gcc"
 
         git fetch --tags --depth=1
@@ -38,11 +43,22 @@ jobs:
 
         mkdir -p build
         cd build
+        # Two changes that together cut this build by roughly 4-5x on riscv64,
+        # which is what put it inside the job timeout:
+        #   --disable-bootstrap  builds the compiler once instead of the
+        #                        default 3-stage self-rebuild. We ship the
+        #                        binary, we don't need the bootstrap identity
+        #                        check that distro maintainers do.
+        #   --enable-languages   default is "all", which drags in ada, d, go,
+        #                        m2 and objc. Nobody is pulling this archive
+        #                        for GNAT on RISC-V.
         ../configure \
           --prefix="$GITHUB_WORKSPACE/installed_binaries" \
           --disable-werror \
-          --disable-multilib
-        make -j$(nproc)
+          --disable-multilib \
+          --disable-bootstrap \
+          --enable-languages=c,c++,fortran,lto
+        make -j"$(nproc)"
         make install
 
         "$GITHUB_WORKSPACE/installed_binaries/bin/gcc" --version
