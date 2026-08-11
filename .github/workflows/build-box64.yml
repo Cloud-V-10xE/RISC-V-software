@@ -61,14 +61,45 @@ jobs:
         # runner's throwaway build directory, so shipping it would hand users a
         # binfmt rule pointing at a path that does not exist on their machine.
         # The confs are regenerated below against the real install location.
+        #
+        # NO_LIB_INSTALL=ON is required for the same class of reason: the
+        # bundled x86 libraries go to a hardcoded absolute
+        # /usr/lib/box64-x86_64-linux-gnu (and .../box64-i386-linux-gnu), so the
+        # install dies with "file cannot create directory: /usr/lib/box64-...".
+        # Those two options together are the complete set — every remaining
+        # install() destination in upstream's CMakeLists is relative to the
+        # prefix. The files each option suppresses are restored below.
         cmake .. -G Ninja \
           -DRV64=1 \
           -DBOX32=1 \
           -DNO_CONF_INSTALL=ON \
+          -DNO_LIB_INSTALL=ON \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DCMAKE_INSTALL_PREFIX="$PREFIX"
         ninja
         ninja install
+
+        # NO_LIB_INSTALL also gates three helpers that were installing to
+        # perfectly good relative paths, so put them back by hand.
+        install -Dm755 "$GITHUB_WORKSPACE/box64-src/tests/box64-bash" \
+                       "$PREFIX/bin/box64-bash"
+        install -Dm755 "$GITHUB_WORKSPACE/box64-src/system/box64-python" \
+                       "$PREFIX/bin/box64-python"
+        install -Dm644 "$GITHUB_WORKSPACE/box64-src/system/sitecustomize.py" \
+                       "$PREFIX/share/box64/sitecustomize.py"
+
+        # The bundled x86_64/i386 libraries (~15 MB) let box64 run programs that
+        # want libraries the host has no riscv64 equivalent for. Upstream wants
+        # them at an absolute /usr/lib path that this relocatable tarball cannot
+        # own, so ship them under the prefix and let BOX64_LD_LIBRARY_PATH find
+        # them — see docs/packages/box64.md.
+        for LIBDIR in x64lib x86lib; do
+          if [ -d "$GITHUB_WORKSPACE/box64-src/${LIBDIR}" ]; then
+            mkdir -p "$PREFIX/share/box64/${LIBDIR}"
+            cp -a "$GITHUB_WORKSPACE/box64-src/${LIBDIR}/." \
+                  "$PREFIX/share/box64/${LIBDIR}/"
+          fi
+        done
 
         # binfmt_misc registration — the thing that makes x86-64 binaries just
         # run. Written for /usr/local, which is where this tarball is meant to

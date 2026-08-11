@@ -17,29 +17,59 @@ jobs:
       # Even with the trimmed configure below this is a multi-hour build, and
       # the job default (360) killed it mid-link last cycle.
       timeout-minutes: 600
-      apt-packages: build-essential libatomic1 flex bison libgmp-dev libmpfr-dev libmpc-dev
+      apt-packages: build-essential libatomic1 flex bison libgmp-dev libmpfr-dev libmpc-dev xz-utils
       setup-script: |
         set -eux
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
       build-script: |
         set -eux
-        git config --global http.postBuffer 524288000
-        git config --global http.maxRequests 2
-        git config --global core.compression 0
 
-        rm -rf "$GITHUB_WORKSPACE/gcc"
-        # git:// is unauthenticated and blocked on a lot of networks; https is
-        # the protocol gcc.gnu.org actually documents.
-        git clone --depth=1 --no-tags https://gcc.gnu.org/git/gcc.git "$GITHUB_WORKSPACE/gcc"
-        cd "$GITHUB_WORKSPACE/gcc"
+        # Release tarball, not `git clone https://gcc.gnu.org/git/gcc.git`.
+        # That clone is several hundred MB even with --depth=1, and gcc.gnu.org
+        # rate-limits it — the previous run died on the clone with:
+        #   error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429
+        # The tarball is ~107 MB, is mirrored in several places, and needs no
+        # git at all. The http.postBuffer/compression tuning that used to be
+        # here was only ever nursing that clone along, so it is gone too.
+        GCC_RELEASE=$(curl -fsSL --retry 5 --retry-delay 10 https://ftp.gnu.org/gnu/gcc/ \
+          | grep -oE 'gcc-[0-9]+\.[0-9]+\.[0-9]+/' \
+          | tr -d '/' | sed 's/^gcc-//' | sort -uV | tail -n1)
+        [ -n "$GCC_RELEASE" ] || { echo "Could not resolve a GCC release" >&2; exit 1; }
+        echo "Latest GCC release: $GCC_RELEASE"
 
-        git fetch --tags --depth=1
-        LATEST_TAG=$(git tag -l "releases/gcc*" | sort -V | tail -n 1)
-        echo "Checking out $LATEST_TAG"
-        git fetch --depth=1 origin tag "$LATEST_TAG"
-        git checkout FETCH_HEAD
+        SRC="$GITHUB_WORKSPACE/gcc-${GCC_RELEASE}"
+        TARBALL="$GITHUB_WORKSPACE/gcc-${GCC_RELEASE}.tar.xz"
+        rm -rf "$SRC" "$TARBALL"
 
-        ./contrib/download_prerequisites
+        # ftpmirror.gnu.org redirects to a nearby mirror; the explicit hosts are
+        # fallbacks for when it lands on an unhealthy one.
+        # The integrity test is not belt-and-braces: a mirror dropping the
+        # connection part-way leaves a truncated .tar.xz behind, and a bare
+        # "is it non-empty" check would happily hand that to tar, which then
+        # fails ~100 MB and one wasted mirror later with "Unexpected EOF in
+        # archive". `xz -t` catches it here, so the loop can try the next one.
+        for BASE in https://ftpmirror.gnu.org/gcc \
+                    https://ftp.gnu.org/gnu/gcc \
+                    https://mirrors.kernel.org/gnu/gcc; do
+          echo "Fetching from ${BASE}"
+          if curl -fL --retry 3 --retry-delay 10 --connect-timeout 30 \
+                  -o "$TARBALL" "${BASE}/gcc-${GCC_RELEASE}/gcc-${GCC_RELEASE}.tar.xz" \
+             && xz -t "$TARBALL"; then
+            echo "Got a complete tarball from ${BASE}"
+            break
+          fi
+          echo "${BASE} did not yield a usable tarball; trying the next mirror"
+          rm -f "$TARBALL"
+        done
+        [ -s "$TARBALL" ] || { echo "No mirror served a complete GCC tarball" >&2; exit 1; }
+
+        tar -xf "$TARBALL" -C "$GITHUB_WORKSPACE"
+        rm -f "$TARBALL"
+        cd "$SRC"
+
+        # No ./contrib/download_prerequisites here: that is another gcc.gnu.org
+        # round-trip that can 429, and the apt-packages above already provide
+        # gmp, mpfr and mpc far above the minimums GCC asks for.
 
         mkdir -p build
         cd build
@@ -51,7 +81,11 @@ jobs:
           --prefix="$GITHUB_WORKSPACE/installed_binaries" \
           --disable-werror \
           --disable-multilib \
-          --disable-bootstrap \
+          --disable-bootstrap
+
+        # This `make` used to sit on the end of the configure line's backslash
+        # continuation, so it was passed to configure as an argument rather than
+        # run — configure took "make" as the host triplet and rejected "-j<n>".
         make -j"$(nproc)"
         make install
 
