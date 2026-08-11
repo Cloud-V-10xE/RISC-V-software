@@ -288,3 +288,22 @@ jobs:
             docker rmi -f "${IMAGE}:${{ matrix.extra_tag }}" 2>/dev/null || true
           fi
           docker image prune -f 2>/dev/null || true
+
+  # Runs on the daily schedule too, not just after a build: the description
+  # should follow edits to the docs page, which happen far more often than a
+  # new runner release. `always()` is what keeps it running on the days the
+  # build job is skipped as up to date.
+  dockerhub-description:
+    name: Sync Docker Hub description
+    needs: build
+    if: always() && !cancelled()
+    uses: ./.github/workflows/_dockerhub-description.yaml
+    with:
+      repository: github-actions-riscv
+      readme-path: docs/packages/github-actions-riscv.md
+      short-description: >-
+        Self-hosted GitHub Actions runner for linux/riscv64,
+        with docker-in-docker support
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

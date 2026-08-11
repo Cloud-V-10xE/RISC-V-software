@@ -1,0 +1,141 @@
+# Pushes a docs page into a Docker Hub repository's description.
+#
+# Docker Hub repositories default to an empty overview, so an image published
+# from here otherwise arrives with no explanation of what it is or how to run
+# it. This keeps the Hub page as the single source of truth's mirror: the
+# markdown in docs/packages/ is what gets published.
+#
+# Implemented with curl and jq rather than a Marketplace action on purpose.
+# JavaScript actions need a node binary for the runner's architecture, and this
+# repository's riscv64 fleet has no supported node distribution — so any JS
+# action is a coin toss there. Plain shell works on every runner, and this job
+# is pinned to x86 anyway because it is a single API call.
+name: Docker Hub description
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: 'Docker Hub repository name, without the namespace (e.g. github-actions-riscv).'
+        required: true
+        type: string
+      readme-path:
+        description: 'Path to the markdown file to publish as the full description.'
+        required: true
+        type: string
+      short-description:
+        description: 'One-line summary shown in Hub search results. Max 100 characters.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+
+jobs:
+  update:
+    name: Update ${{ inputs.repository }} description
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Publish description to Docker Hub
+        env:
+          # Not `set -x` anywhere in this step: it would echo the credentials.
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REPOSITORY: ${{ inputs.repository }}
+          README_PATH: ${{ inputs.readme-path }}
+          SHORT_DESCRIPTION: ${{ inputs.short-description }}
+          HUB_API: https://hub.docker.com
+        run: |
+          set -euo pipefail
+
+          [ -f "$README_PATH" ] || { echo "::error::$README_PATH not found"; exit 1; }
+
+          # Docker Hub caps the overview at 25,000 characters and the short
+          # description at 100. Both fail the request rather than truncating,
+          # so check here and say which one it was.
+          FULL_LEN=$(wc -c < "$README_PATH")
+          if [ "$FULL_LEN" -gt 25000 ]; then
+            echo "::error::$README_PATH is ${FULL_LEN} bytes; Docker Hub allows 25000"
+            exit 1
+          fi
+          if [ -n "$SHORT_DESCRIPTION" ] && [ "${#SHORT_DESCRIPTION}" -gt 100 ]; then
+            echo "::error::short-description is ${#SHORT_DESCRIPTION} characters; Docker Hub allows 100"
+            exit 1
+          fi
+
+          # A note on provenance, so nobody edits the Hub page by hand and
+          # wonders why their change vanishes on the next run.
+          {
+            cat "$README_PATH"
+            printf '\n\n---\n\n'
+            printf '_Published automatically from [`%s`](https://github.com/%s/blob/main/%s). Edit it there._\n' \
+              "$README_PATH" "$GITHUB_REPOSITORY" "$README_PATH"
+          } > /tmp/full_description.md
+
+          echo "Authenticating to Docker Hub..."
+          LOGIN_BODY=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" \
+            '{username: $u, password: $p}')
+
+          LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' \
+            -X POST "${HUB_API}/v2/users/login/" \
+            -H 'Content-Type: application/json' \
+            -d "$LOGIN_BODY")
+
+          if [ "$LOGIN_CODE" != "200" ]; then
+            echo "::error::Docker Hub login failed with HTTP ${LOGIN_CODE}."
+            echo "A token with read/write scope is required — a read-only token"
+            echo "authenticates for docker pull but cannot edit a description."
+            jq -r '.detail // .message // empty' /tmp/login.json 2>/dev/null || true
+            exit 1
+          fi
+
+          JWT=$(jq -r '.token // empty' /tmp/login.json)
+          [ -n "$JWT" ] || { echo "::error::No token in the login response"; exit 1; }
+          echo "::add-mask::$JWT"
+
+          echo "Updating ${DOCKERHUB_USERNAME}/${REPOSITORY}..."
+          if [ -n "$SHORT_DESCRIPTION" ]; then
+            PATCH_BODY=$(jq -n --rawfile fd /tmp/full_description.md --arg d "$SHORT_DESCRIPTION" \
+              '{full_description: $fd, description: $d}')
+          else
+            PATCH_BODY=$(jq -n --rawfile fd /tmp/full_description.md \
+              '{full_description: $fd}')
+          fi
+
+          PATCH_CODE=$(curl -sS -o /tmp/patch.json -w '%{http_code}' \
+            -X PATCH "${HUB_API}/v2/repositories/${DOCKERHUB_USERNAME}/${REPOSITORY}/" \
+            -H "Authorization: JWT ${JWT}" \
+            -H 'Content-Type: application/json' \
+            -d "$PATCH_BODY")
+
+          case "$PATCH_CODE" in
+            200)
+              echo "Description updated ($(wc -c < /tmp/full_description.md) bytes)"
+              ;;
+            404)
+              echo "::error::No such repository: ${DOCKERHUB_USERNAME}/${REPOSITORY}."
+              echo "Docker Hub creates a repository on first push, so this fails until"
+              echo "the image has been pushed at least once."
+              exit 1
+              ;;
+            *)
+              echo "::error::Update failed with HTTP ${PATCH_CODE}"
+              jq -r '.detail // .message // empty' /tmp/patch.json 2>/dev/null || cat /tmp/patch.json
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "### Docker Hub description"
+            echo
+            echo "- Repository: \`${REPOSITORY}\`"
+            echo "- Source: \`${README_PATH}\`"
+            echo "- Size: $(wc -c < /tmp/full_description.md) bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
