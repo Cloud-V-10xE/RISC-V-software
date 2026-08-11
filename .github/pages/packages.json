@@ -6,7 +6,10 @@
       "category": "Compilers & Toolchains",
       "description": "GNU Compiler Collection — C, C++, Fortran and more",
       "central_release": true,
-      "workflow": "build-gcc.yml"
+      "workflow": "build-gcc.yml",
+      "icon": "gnu.svg",
+      "icon_color": "#A42E2B",
+      "icon_color_dark": "#D35855"
     },
     {
       "id": "coreutils",
@@ -14,7 +17,10 @@
       "category": "Compilers & Toolchains",
       "description": "GNU core utilities — ls, cp, mv, cat and friends",
       "central_release": true,
-      "workflow": "build-coreutils.yml"
+      "workflow": "build-coreutils.yml",
+      "icon": "gnu.svg",
+      "icon_color": "#A42E2B",
+      "icon_color_dark": "#D35855"
     },
     {
       "id": "binutils",
@@ -22,7 +28,10 @@
       "category": "Compilers & Toolchains",
       "description": "GNU binary utilities — as, ld, objdump and more",
       "central_release": true,
-      "workflow": "build-binutils.yml"
+      "workflow": "build-binutils.yml",
+      "icon": "gnu.svg",
+      "icon_color": "#A42E2B",
+      "icon_color_dark": "#D35855"
     },
     {
       "id": "strace",
@@ -30,7 +39,9 @@
       "category": "Compilers & Toolchains",
       "description": "System call tracer for Linux",
       "central_release": true,
-      "workflow": "build-strace.yml"
+      "workflow": "build-strace.yml",
+      "icon_color": "#30A640",
+      "icon_color_dark": "#59CF69"
     },
     {
       "id": "nodejs",
@@ -38,7 +49,10 @@
       "category": "Runtimes",
       "description": "JavaScript runtime built on V8",
       "central_release": true,
-      "workflow": "build-node.yml"
+      "workflow": "build-node.yml",
+      "icon": "nodedotjs.svg",
+      "icon_color": "#569046",
+      "icon_color_dark": "#7EB96F"
     },
     {
       "id": "luajit",
@@ -46,7 +60,10 @@
       "category": "Runtimes",
       "description": "Just-in-time compiler for Lua — upstream has no RISC-V backend and Ubuntu 24.04 ships no riscv64 build, so this is the only prebuilt option",
       "central_release": true,
-      "workflow": "build-luajit.yml"
+      "workflow": "build-luajit.yml",
+      "icon": "lua.svg",
+      "icon_color": "#000080",
+      "icon_color_dark": "#2929FF"
     },
     {
       "id": "torch",
@@ -54,7 +71,10 @@
       "category": "ML Frameworks",
       "description": "Machine learning framework by Meta",
       "central_release": true,
-      "workflow": "build-pytorch.yml"
+      "workflow": "build-pytorch.yml",
+      "icon": "pytorch.svg",
+      "icon_color": "#C62E10",
+      "icon_color_dark": "#EF5739"
     },
     {
       "id": "transformers",
@@ -62,7 +82,10 @@
       "category": "ML Frameworks",
       "description": "Hugging Face Transformers library",
       "central_release": true,
-      "workflow": "build-transformers.yml"
+      "workflow": "build-transformers.yml",
+      "icon": "huggingface.svg",
+      "icon_color": "#D6AB00",
+      "icon_color_dark": "#FFD429"
     },
     {
       "id": "onnxruntime",
@@ -70,7 +93,10 @@
       "category": "ML Frameworks",
       "description": "Cross-platform ML inference engine by Microsoft",
       "central_release": true,
-      "workflow": "build-onnx.yml"
+      "workflow": "build-onnx.yml",
+      "icon": "onnx.svg",
+      "icon_color": "#0053D6",
+      "icon_color_dark": "#297CFF"
     },
     {
       "id": "kubernetes",
@@ -78,7 +104,10 @@
       "category": "Infrastructure",
       "description": "Container orchestration system",
       "central_release": true,
-      "workflow": "build-kubernetes.yaml"
+      "workflow": "build-kubernetes.yaml",
+      "icon": "kubernetes.svg",
+      "icon_color": "#184EBE",
+      "icon_color_dark": "#4177E7"
     },
     {
       "id": "calico",
@@ -86,7 +115,9 @@
       "category": "Infrastructure",
       "description": "Container networking and network policy for Kubernetes",
       "central_release": true,
-      "workflow": "build-calico.yaml"
+      "workflow": "build-calico.yaml",
+      "icon_color": "#8B30A6",
+      "icon_color_dark": "#B359CF"
     },
     {
       "id": "loki",
@@ -94,7 +125,10 @@
       "category": "Infrastructure",
       "description": "Log aggregation system by Grafana — upstream builds riscv64 in CI but never publishes it, and no distro packages it",
       "central_release": true,
-      "workflow": "build-loki.yml"
+      "workflow": "build-loki.yml",
+      "icon": "grafana.svg",
+      "icon_color": "#D65B00",
+      "icon_color_dark": "#FF8429"
     },
     {
       "id": "kube-apiserver",
@@ -105,7 +139,10 @@
       "workflow": "build-k8s-components.yml",
       "install_type": "docker",
       "docker_image": "cloudv10x/kube-apiserver",
-      "docker_tag": "latest"
+      "docker_tag": "latest",
+      "icon": "kubernetes.svg",
+      "icon_color": "#184EBE",
+      "icon_color_dark": "#4177E7"
     },
     {
       "id": "kube-controller-manager",
@@ -116,7 +153,10 @@
       "workflow": "build-k8s-components.yml",
       "install_type": "docker",
       "docker_image": "cloudv10x/kube-controller-manager",
-      "docker_tag": "latest"
+      "docker_tag": "latest",
+      "icon": "kubernetes.svg",
+      "icon_color": "#184EBE",
+      "icon_color_dark": "#4177E7"
     },
     {
       "id": "kube-scheduler",
@@ -127,7 +167,10 @@
       "workflow": "build-k8s-components.yml",
       "install_type": "docker",
       "docker_image": "cloudv10x/kube-scheduler",
-      "docker_tag": "latest"
+      "docker_tag": "latest",
+      "icon": "kubernetes.svg",
+      "icon_color": "#184EBE",
+      "icon_color_dark": "#4177E7"
     },
     {
       "id": "kube-proxy",
@@ -138,7 +181,10 @@
       "workflow": "build-k8s-components.yml",
       "install_type": "docker",
       "docker_image": "cloudv10x/kube-proxy",
-      "docker_tag": "latest"
+      "docker_tag": "latest",
+      "icon": "kubernetes.svg",
+      "icon_color": "#184EBE",
+      "icon_color_dark": "#4177E7"
     },
     {
       "id": "etcd",
@@ -149,7 +195,10 @@
       "workflow": "build-etcd.yml",
       "install_type": "docker",
       "docker_image": "cloudv10x/etcd",
-      "docker_tag": "latest"
+      "docker_tag": "latest",
+      "icon": "etcd.svg",
+      "icon_color": "#237BB3",
+      "icon_color_dark": "#4CA3DC"
     },
     {
       "id": "cmake",
@@ -157,7 +206,10 @@
       "category": "Build Tools",
       "description": "Cross-platform build system generator",
       "central_release": true,
-      "workflow": "build-cmake.yml"
+      "workflow": "build-cmake.yml",
+      "icon": "cmake.svg",
+      "icon_color": "#064F8C",
+      "icon_color_dark": "#329DF6"
     },
     {
       "id": "ninja",
@@ -165,7 +217,9 @@
       "category": "Build Tools",
       "description": "Small fast build system used by LLVM, CMake and Chrome",
       "central_release": true,
-      "workflow": "build-ninja.yml"
+      "workflow": "build-ninja.yml",
+      "icon_color": "#3036A6",
+      "icon_color_dark": "#595FCF"
     },
     {
       "id": "sqlite",
@@ -173,7 +227,10 @@
       "category": "Runtimes",
       "description": "Lightweight embedded SQL database engine — latest versions not prebuilt for riscv64",
       "central_release": true,
-      "workflow": "build-sqlite.yml"
+      "workflow": "build-sqlite.yml",
+      "icon": "sqlite.svg",
+      "icon_color": "#003B57",
+      "icon_color_dark": "#29BAFF"
     },
     {
       "id": "python",
@@ -181,7 +238,10 @@
       "category": "Runtimes",
       "description": "Python 3.13 — latest version with significant performance improvements, no prebuilt riscv64 binary",
       "central_release": true,
-      "workflow": "build-python.yml"
+      "workflow": "build-python.yml",
+      "icon": "python.svg",
+      "icon_color": "#3470A2",
+      "icon_color_dark": "#5D99CB"
     },
     {
       "id": "ruby",
@@ -189,7 +249,10 @@
       "category": "Runtimes",
       "description": "Ruby programming language — latest versions not available via apt for riscv64",
       "central_release": true,
-      "workflow": "build-ruby.yml"
+      "workflow": "build-ruby.yml",
+      "icon": "ruby.svg",
+      "icon_color": "#AF2D27",
+      "icon_color_dark": "#D85650"
     },
     {
       "id": "zstd",
@@ -197,7 +260,9 @@
       "category": "Build Tools",
       "description": "Fast lossless compression algorithm used by Docker, kernel and package managers",
       "central_release": true,
-      "workflow": "build-zstd.yml"
+      "workflow": "build-zstd.yml",
+      "icon_color": "#79A630",
+      "icon_color_dark": "#A2CF59"
     },
     {
       "id": "protobuf",
@@ -205,7 +270,9 @@
       "category": "Infrastructure",
       "description": "Protocol Buffers compiler and runtime — required by gRPC, TensorFlow and Kubernetes",
       "central_release": true,
-      "workflow": "build-protobuf.yml"
+      "workflow": "build-protobuf.yml",
+      "icon_color": "#30A642",
+      "icon_color_dark": "#59CF6B"
     },
     {
       "id": "grpc",
@@ -213,7 +280,9 @@
       "category": "Infrastructure",
       "description": "High-performance RPC framework used by cloud-native tools — no riscv64 prebuilt",
       "central_release": true,
-      "workflow": "build-grpc.yml"
+      "workflow": "build-grpc.yml",
+      "icon_color": "#30A6A6",
+      "icon_color_dark": "#59CFCF"
     },
     {
       "id": "ffmpeg",
@@ -221,7 +290,10 @@
       "category": "Media",
       "description": "Complete media framework — no prebuilt riscv64 exists anywhere, and Ubuntu 24.04 is frozen at 6.1.1 with 30 RISC-V vector asm files vs ~102 upstream",
       "central_release": true,
-      "workflow": "build-ffmpeg.yml"
+      "workflow": "build-ffmpeg.yml",
+      "icon": "ffmpeg.svg",
+      "icon_color": "#007808",
+      "icon_color_dark": "#29FF37"
     },
     {
       "id": "dav1d",
@@ -229,7 +301,9 @@
       "category": "Media",
       "description": "Fast AV1 decoder by VideoLAN — Ubuntu 24.04 ships only inverse-transform RVV asm; upstream adds motion compensation, cdef, ipred and film grain",
       "central_release": true,
-      "workflow": "build-dav1d.yml"
+      "workflow": "build-dav1d.yml",
+      "icon_color": "#5230A6",
+      "icon_color_dark": "#7A59CF"
     },
     {
       "id": "x265",
@@ -237,7 +311,9 @@
       "category": "Media",
       "description": "HEVC/H.265 encoder — gained a full RISC-V vector backend in 4.2; Ubuntu 24.04 still ships 3.5 from 2021 with zero RISC-V code",
       "central_release": true,
-      "workflow": "build-x265.yml"
+      "workflow": "build-x265.yml",
+      "icon_color": "#75A630",
+      "icon_color_dark": "#9ECF59"
     },
     {
       "id": "svt-av1",
@@ -245,7 +321,9 @@
       "category": "Media",
       "description": "AV1 encoder — upstream publishes no binaries for any architecture and Ubuntu 24.04 is three major versions behind",
       "central_release": true,
-      "workflow": "build-svt-av1.yml"
+      "workflow": "build-svt-av1.yml",
+      "icon_color": "#A69830",
+      "icon_color_dark": "#CFC159"
     },
     {
       "id": "llama-cpp",
@@ -253,7 +331,9 @@
       "category": "ML Frameworks",
       "description": "LLM inference in C/C++ — upstream ships s390x release binaries but not riscv64, despite active RVV optimization work",
       "central_release": true,
-      "workflow": "build-llama-cpp.yml"
+      "workflow": "build-llama-cpp.yml",
+      "icon_color": "#6DA630",
+      "icon_color_dark": "#96CF59"
     },
     {
       "id": "box64",
@@ -261,7 +341,9 @@
       "category": "Runtimes",
       "description": "x86-64 emulator for RISC-V — upstream ships no host binary for any architecture, and Ubuntu 24.04 has no package at all",
       "central_release": true,
-      "workflow": "build-box64.yml"
+      "workflow": "build-box64.yml",
+      "icon_color": "#30A636",
+      "icon_color_dark": "#59CF5F"
     },
     {
       "id": "nim",
@@ -269,7 +351,10 @@
       "category": "Runtimes",
       "description": "Nim compiler — no riscv64 binary via releases, nightlies or choosenim; Ubuntu 24.04 is stuck on 1.6.14",
       "central_release": true,
-      "workflow": "build-nim.yml"
+      "workflow": "build-nim.yml",
+      "icon": "nim.svg",
+      "icon_color": "#D6BB00",
+      "icon_color_dark": "#FFE953"
     },
     {
       "id": "opentofu",
@@ -277,7 +362,10 @@
       "category": "Infrastructure",
       "description": "MPL-licensed Terraform fork — no riscv64 in its 164 release assets and not packaged in Debian or Ubuntu",
       "central_release": true,
-      "workflow": "build-opentofu.yml"
+      "workflow": "build-opentofu.yml",
+      "icon": "opentofu.svg",
+      "icon_color": "#D6B400",
+      "icon_color_dark": "#FFDD29"
     },
     {
       "id": "docker",
@@ -285,7 +373,10 @@
       "category": "Infrastructure",
       "description": "dockerd, docker CLI and docker-proxy — download.docker.com has no riscv64 at all and Ubuntu 24.04 is pinned to 24.0.7",
       "central_release": true,
-      "workflow": "build-docker.yml"
+      "workflow": "build-docker.yml",
+      "icon": "docker.svg",
+      "icon_color": "#1077C6",
+      "icon_color_dark": "#39A0EF"
     },
     {
       "id": "github-actions-riscv",
@@ -296,7 +387,10 @@
       "workflow": "build-runner-image.yml",
       "install_type": "docker",
       "docker_image": "cloudv10x/github-actions-riscv",
-      "docker_tag": "latest"
+      "docker_tag": "latest",
+      "icon": "githubactions.svg",
+      "icon_color": "#0064D6",
+      "icon_color_dark": "#298DFF"
     }
   ]
 }
