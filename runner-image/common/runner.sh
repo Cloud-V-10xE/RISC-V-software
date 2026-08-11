@@ -39,6 +39,26 @@ fi
 # ephemeral mode viable at all.
 mint_registration_token() {
     local api="${GITHUB_API_URL:-https://api.github.com}"
+
+    # Easy mistake, because the two are configured side by side: a registration
+    # token is ~29 uppercase alphanumerics with no prefix, whereas every GitHub
+    # PAT carries one (ghp_, github_pat_, gho_, ghs_, ghu_). Handing the API a
+    # registration token as the credential just yields a bare 401, so name the
+    # actual problem instead.
+    if [[ "${GITHUB_PAT}" =~ ^[A-Z0-9]{20,40}$ ]]; then
+        echo "GITHUB_PAT looks like a runner registration token, not a PAT."          >&2
+        echo ""                                                                       >&2
+        echo "  Registration tokens are ~29 uppercase characters with no prefix;"     >&2
+        echo "  PATs start with ghp_ or github_pat_."                                 >&2
+        echo ""                                                                       >&2
+        echo "  If that value came from Settings -> Actions -> Runners, pass it as"   >&2
+        echo "  RUNNER_TOKEN instead of GITHUB_PAT -- but note it is single-use, so"  >&2
+        echo "  leave RUNNER_EPHEMERAL unset when you do."                            >&2
+        echo ""                                                                       >&2
+        echo "  For an ephemeral runner that survives restarts, create a PAT with"    >&2
+        echo "  repo scope and pass that as GITHUB_PAT."                              >&2
+        exit 1
+    fi
     local path="${GITHUB_REPO%/}"
     path="${path#*://}"          # github.com/owner/repo
     path="${path#*/}"            # owner/repo, or just org
@@ -57,9 +77,13 @@ mint_registration_token() {
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "${endpoint}")" \
-        || { echo "Failed to mint a registration token. The PAT needs repo scope (or"  >&2
-             echo "admin:org for an org runner), and GITHUB_REPO must name a repo you" >&2
-             echo "can administer: ${GITHUB_REPO}"                                     >&2
+        || { echo "Failed to mint a registration token for ${GITHUB_REPO}."            >&2
+             echo ""                                                                   >&2
+             echo "  401 means GITHUB_PAT is not a valid credential — check that it"   >&2
+             echo "      is a PAT (ghp_... / github_pat_...) and has not expired."     >&2
+             echo "  403 means the PAT is valid but lacks the scope: classic tokens"   >&2
+             echo "      need 'repo', fine-grained ones need Administration:write."    >&2
+             echo "  404 means the account cannot see or administer that repository."  >&2
              exit 1; }
 
     RUNNER_TOKEN="$(jq -r '.token // empty' <<< "${resp}")"
