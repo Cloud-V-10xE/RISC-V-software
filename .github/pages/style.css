@@ -161,9 +161,56 @@ h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
   word-break: break-word;
 }
 .pkg-card:hover { background: var(--card-hover); text-decoration: none; }
-.pkg-card-name { font-family: var(--mono); font-size: 14px; font-weight: 500; margin-bottom: 4px; color: var(--text); }
+.pkg-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.pkg-card-name { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--text); }
 .pkg-card-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
 .pkg-card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── Package icons ──
+   Each icon carries its own colours as inline custom properties, set from
+   packages.json: --ic for the light theme, --icd for dark. Brand colours are
+   not picked for our two backgrounds — Lua's #000080 disappears on the dark
+   theme, Nim's #FFE953 on the light one — so the vendoring script clamps
+   lightness per theme and stores both.
+
+   The mark itself is painted with mask-image rather than <img>, so a single
+   monochrome SVG takes whichever colour the current theme calls for. Packages
+   with no upstream mark get a monogram tile in the same shape.               */
+.pkg-icon {
+  flex: 0 0 auto;
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--thead);                                  /* pre-color-mix fallback */
+  background: color-mix(in srgb, var(--ic) 13%, transparent);
+}
+.pkg-icon::before {
+  content: "";
+  width: 19px; height: 19px;
+  background-color: var(--ic);
+  -webkit-mask: var(--im) center / contain no-repeat;
+          mask: var(--im) center / contain no-repeat;
+}
+.pkg-icon-mono::before { content: none; }
+.pkg-icon-mono {
+  color: var(--ic);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+[data-theme="dark"] .pkg-icon { background: color-mix(in srgb, var(--icd) 16%, transparent); }
+[data-theme="dark"] .pkg-icon::before { background-color: var(--icd); }
+[data-theme="dark"] .pkg-icon-mono { color: var(--icd); }
+
+.page-title { display: flex; align-items: center; gap: 14px; }
+.page-title h1 { margin: 0; }
+
+/* Larger tile for the per-package page header */
+.pkg-icon-lg { width: 44px; height: 44px; border-radius: 11px; }
+.pkg-icon-lg::before { width: 25px; height: 25px; }
+.pkg-icon-lg.pkg-icon-mono { font-size: 17px; }
 
 /* ── List view ── */
 body.list-view .pkg-grid {
@@ -179,6 +226,10 @@ body.list-view .pkg-card {
   border-bottom: 1px solid var(--border);
 }
 body.list-view .pkg-card:last-child { border-bottom: none; }
+body.list-view .pkg-card-head { margin-bottom: 0; flex: 0 0 auto; min-width: 190px; }
+body.list-view .pkg-icon { width: 26px; height: 26px; border-radius: 7px; }
+body.list-view .pkg-icon::before { width: 15px; height: 15px; }
+body.list-view .pkg-icon-mono { font-size: 11px; }
 body.list-view .pkg-card-name { min-width: 120px; margin-bottom: 0; font-size: 13px; }
 body.list-view .pkg-card-desc { margin-bottom: 0; flex: 1; }
 body.list-view .pkg-card-meta { margin-left: auto; flex-shrink: 0; }

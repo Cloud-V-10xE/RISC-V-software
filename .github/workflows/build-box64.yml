@@ -52,13 +52,44 @@ jobs:
         # RV64=1 selects the RISC-V dynarec. Box32 (32-bit x86 support) is
         # bundled and off by default; RISC-V needs Box32 rather than the
         # separate box86 project, so enable it here.
+        #
+        # NO_CONF_INSTALL=ON is required, for two reasons. Upstream installs its
+        # binfmt config to a hardcoded absolute /etc/binfmt.d/ that ignores
+        # CMAKE_INSTALL_PREFIX, so `ninja install` fails as a non-root user with
+        # "file cannot create directory: /etc/binfmt.d". And the config is
+        # generated from ${CMAKE_INSTALL_PREFIX}/bin/box64 — which here is this
+        # runner's throwaway build directory, so shipping it would hand users a
+        # binfmt rule pointing at a path that does not exist on their machine.
+        # The confs are regenerated below against the real install location.
         cmake .. -G Ninja \
           -DRV64=1 \
           -DBOX32=1 \
+          -DNO_CONF_INSTALL=ON \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DCMAKE_INSTALL_PREFIX="$PREFIX"
         ninja
         ninja install
+
+        # binfmt_misc registration — the thing that makes x86-64 binaries just
+        # run. Written for /usr/local, which is where this tarball is meant to
+        # be extracted, and placed in lib/binfmt.d because systemd-binfmt reads
+        # /usr/local/lib/binfmt.d/ as well as /etc/binfmt.d/ (binfmt.d(5)).
+        mkdir -p "$PREFIX/lib/binfmt.d"
+        printf '%s\n' \
+          '# Installed by RISC-V-software; see binfmt.d(5)' \
+          ':box64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/local/bin/box64:' \
+          > "$PREFIX/lib/binfmt.d/box64.conf"
+        printf '%s\n' \
+          '# Installed by RISC-V-software; see binfmt.d(5)' \
+          ':box32:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x03\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/local/bin/box64:' \
+          > "$PREFIX/lib/binfmt.d/box32.conf"
+
+        # Upstream's system-wide rc file is read from /etc/box64.box64rc, which
+        # is outside this tarball's prefix, so ship it as a reference copy
+        # rather than somewhere box64 will never look.
+        mkdir -p "$PREFIX/share/box64"
+        cp "$GITHUB_WORKSPACE/box64-src/system/box64.box64rc" \
+           "$PREFIX/share/box64/box64.box64rc"
 
         "$PREFIX/bin/box64" --version 2>&1 | head -5 || true
         file "$PREFIX/bin/box64" | grep -q "RISC-V" \

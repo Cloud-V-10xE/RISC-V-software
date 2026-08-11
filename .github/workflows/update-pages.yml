@@ -12,6 +12,8 @@ on:
     paths:
       - .github/pages/packages.json
       - .github/pages/style.css
+      - .github/pages/script.js
+      - .github/pages/icons/**
       - .github/workflows/update-pages.yml
 
 jobs:
@@ -53,6 +55,37 @@ jobs:
           # ── Base path for GitHub Pages subpath ──
           BASE="/RISC-V-software"
 
+          # ── Package icons ──
+          # Vendored SVGs (CC0, from Simple Icons) served as real files rather
+          # than inlined: they are shared across every page, so the browser
+          # caches them once instead of re-parsing them in each document.
+          # See .github/pages/icons/README.md.
+          mkdir -p _site/icons
+          if compgen -G ".github/pages/icons/*.svg" > /dev/null; then
+            cp .github/pages/icons/*.svg _site/icons/
+            echo "Copied $(ls _site/icons | wc -l) package icons"
+          else
+            echo "WARNING: no icons found — cards will fall back to monogram tiles"
+          fi
+
+          # Renders the icon tile for a package. Emits a masked SVG mark when the
+          # package has one, otherwise a monogram tile using the first two
+          # characters of the label. $2 adds a modifier class (e.g. pkg-icon-lg).
+          pkg_icon() {
+            local pkg="$1" extra="${2:-}"
+            local ic="${PKG_ICON_COLOR[$pkg]}" icd="${PKG_ICON_COLOR_DARK[$pkg]}"
+            local svg="${PKG_ICON[$pkg]}"
+            if [ -n "$svg" ]; then
+              printf '<span class="pkg-icon %s" style="--ic:%s;--icd:%s;--im:url(%s/icons/%s)" aria-hidden="true"></span>' \
+                "$extra" "$ic" "$icd" "$BASE" "$svg"
+            else
+              local mono="${PKG_LABEL[$pkg]:0:2}"
+              mono="${mono^^}"
+              printf '<span class="pkg-icon pkg-icon-mono %s" style="--ic:%s;--icd:%s" aria-hidden="true">%s</span>' \
+                "$extra" "$ic" "$icd" "$mono"
+            fi
+          }
+
           # ──────────────────────────────────────────────────────────
           # Load package metadata from packages.json
           #
@@ -74,6 +107,9 @@ jobs:
           declare -A PKG_INSTALL_TYPE
           declare -A PKG_DOCKER_IMAGE
           declare -A PKG_DOCKER_TAG
+          declare -A PKG_ICON
+          declare -A PKG_ICON_COLOR
+          declare -A PKG_ICON_COLOR_DARK
 
           while IFS= read -r line; do
             ID=$(echo "$line"       | jq -r '.id')
@@ -91,6 +127,9 @@ jobs:
             PKG_INSTALL_TYPE["$ID"]="$INSTALL_TYPE"
             PKG_DOCKER_IMAGE["$ID"]="$DOCKER_IMAGE"
             PKG_DOCKER_TAG["$ID"]="$DOCKER_TAG"
+            PKG_ICON["$ID"]=$(echo "$line"       | jq -r '.icon // ""')
+            PKG_ICON_COLOR["$ID"]=$(echo "$line" | jq -r '.icon_color // "#666666"')
+            PKG_ICON_COLOR_DARK["$ID"]=$(echo "$line" | jq -r '.icon_color_dark // "#999999"')
             ALL_PKGS+=("$ID")
           done < <(jq -c '.packages[]' "$PKGS_JSON")
 
@@ -246,7 +285,10 @@ jobs:
              data-name="${PKG}"
              data-desc="${PKG_DESC[$PKG]}"
              data-cat="${CAT}">
-            <div class="pkg-card-name">${PKG_LABEL[$PKG]}</div>
+            <div class="pkg-card-head">
+              $(pkg_icon "$PKG")
+              <div class="pkg-card-name">${PKG_LABEL[$PKG]}</div>
+            </div>
             <div class="pkg-card-desc">${PKG_DESC[$PKG]}</div>
             <div class="pkg-card-meta">
           CARD
@@ -280,7 +322,10 @@ jobs:
             <div class="breadcrumb">
               <a href="${BASE}/">index</a><span>/</span>${PKG}
             </div>
-            <h1>${LABEL}</h1>
+            <div class="page-title">
+              $(pkg_icon "$PKG" "pkg-icon-lg")
+              <h1>${LABEL}</h1>
+            </div>
             <p class="page-desc">${DESC}</p>
           HTML
 

@@ -48,12 +48,32 @@ docker run -d --restart always --privileged --init \
   -v runner-docker-lib:/var/lib/docker \
   -e DOCKER_MODE=dind \
   -e GITHUB_REPO="https://github.com/<owner>/<repo>" \
-  -e RUNNER_TOKEN="<registration-token>" \
+  -e GITHUB_PAT="<pat with repo scope>" \
   -e RUNNER_NAME="riscv-runner-1" \
   -e RUNNER_LABELS="riscv64,self-hosted,docker" \
   -e RUNNER_EPHEMERAL=true \
   cloudv10x/github-actions-riscv:docker-latest
 ```
+
+#### Never pair `RUNNER_EPHEMERAL` with a static `RUNNER_TOKEN`
+
+A registration token is **single-use and expires in about an hour**. An ephemeral
+runner deletes its own registration after one job and exits; `--restart always`
+then brings the container back into a *re-registration* that the spent token
+cannot satisfy. GitHub answers `404 Not Found` and the container crash-loops:
+
+```
+Http response code: NotFound from 'POST https://api.github.com/actions/runner-registration'
+```
+
+Pass `GITHUB_PAT` (or `GITHUB_PAT_FILE`) instead, as above. The entrypoint then
+mints a fresh registration token on every start, which is what makes ephemeral
+mode survive restarts at all. The PAT needs `repo` scope for a repository runner
+or `admin:org` for an org runner, and — like the registration token — it is
+scrubbed from the environment before any workflow step runs.
+
+Without a PAT, use a long-lived runner: pass `RUNNER_TOKEN` and leave
+`RUNNER_EPHEMERAL` unset.
 
 `--privileged` is genuinely required, not a shortcut. `--cap-add SYS_ADMIN --cap-add NET_ADMIN` gets dockerd far enough to *start* and then fails at the first build:
 
@@ -115,8 +135,11 @@ docker run -d --restart always \
 | Variable | Default | Purpose |
 |---|---|---|
 | `GITHUB_REPO` | — | **Required.** Repository or org URL to register against |
-| `RUNNER_TOKEN` | — | **Required.** Registration token from Settings → Actions → Runners |
+| `RUNNER_TOKEN` | — | Registration token from Settings → Actions → Runners. Required unless `GITHUB_PAT` is set |
 | `RUNNER_TOKEN_FILE` | — | Read the token from a mounted file instead — keeps it out of `docker inspect` |
+| `GITHUB_PAT` | — | PAT (`repo`, or `admin:org` for org runners) used to mint a fresh registration token on every start. Required for `RUNNER_EPHEMERAL` with `--restart` |
+| `GITHUB_PAT_FILE` | — | Read the PAT from a mounted file instead |
+| `GITHUB_API_URL` | `https://api.github.com` | API base, for GitHub Enterprise Server |
 | `RUNNER_NAME` | container hostname | Runner name |
 | `RUNNER_LABELS` | — | Comma-separated labels passed to `config.sh --labels` |
 | `RUNNER_GROUP` | — | Runner group to register into |
