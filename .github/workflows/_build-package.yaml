@@ -34,10 +34,13 @@ on:
         required: true
         type: string
       runner:
-        description: Runner label to execute on.
+        description: >-
+          Runner label to execute on. Defaults to the self-hosted RISCV64 fleet.
+          Workflows belonging to the RISE CI enablement project pass
+          ubuntu-24.04-riscv instead, to stay on RISE's Scaleway EM-RV1 machines.
         required: false
         type: string
-        default: ubuntu-24.04-riscv
+        default: RISCV64
       timeout-minutes:
         description: >-
           Hard cap for the build job. GitHub kills jobs at 360 minutes;

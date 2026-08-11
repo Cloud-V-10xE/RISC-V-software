@@ -7,10 +7,11 @@ on:
 
 jobs:
   build:
-    # Was "RISCV64" — a label with no runners attached any more, so this job
-    # sat in the queue until GitHub killed it at "24h0m0s awaiting a runner".
-    # Every other workflow in the repo uses this label.
-    runs-on: ubuntu-24.04-riscv
+    # Back on RISCV64 now that the self-hosted fleet is attached to that label.
+    # It was moved off it once before, when the label had no runners and this
+    # job sat queued until GitHub killed it at "24h0m0s awaiting a runner" — so
+    # check that runners are actually registered before relying on it.
+    runs-on: RISCV64
     timeout-minutes: 1080
     permissions:
       contents: write

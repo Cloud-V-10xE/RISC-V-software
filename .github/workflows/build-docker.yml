@@ -30,6 +30,9 @@ jobs:
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: Docker Engine RISC-V
+      # RISE CI enablement project — stays on RISE's Scaleway EM-RV1 fleet
+      # rather than the default self-hosted RISCV64 runners.
+      runner: ubuntu-24.04-riscv
       timeout-minutes: 180
       apt-packages: >-
         build-essential git ca-certificates pkg-config file

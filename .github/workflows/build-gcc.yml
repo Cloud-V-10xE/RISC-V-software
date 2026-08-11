@@ -43,21 +43,15 @@ jobs:
 
         mkdir -p build
         cd build
-        # Two changes that together cut this build by roughly 4-5x on riscv64,
-        # which is what put it inside the job timeout:
         #   --disable-bootstrap  builds the compiler once instead of the
         #                        default 3-stage self-rebuild. We ship the
         #                        binary, we don't need the bootstrap identity
         #                        check that distro maintainers do.
-        #   --enable-languages   default is "all", which drags in ada, d, go,
-        #                        m2 and objc. Nobody is pulling this archive
-        #                        for GNAT on RISC-V.
         ../configure \
           --prefix="$GITHUB_WORKSPACE/installed_binaries" \
           --disable-werror \
           --disable-multilib \
           --disable-bootstrap \
-          --enable-languages=c,c++,fortran,lto
         make -j"$(nproc)"
         make install
 
