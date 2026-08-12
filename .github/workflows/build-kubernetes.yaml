@@ -160,6 +160,22 @@ jobs:
           name: kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-x86_64-linux
           path: ${{ github.workspace }}/kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-x86_64-linux.tar.gz
 
+      - name: Resolve release date
+        id: release-date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      # Without this the asset exists only as a workflow artifact, which
+      # the website cannot see: update-pages.yml is generated purely from
+      # GitHub Releases.
+      - name: Publish asset to the dated release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-${{ steps.release-date.outputs.date }}
+          files: ${{ github.workspace }}/kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-x86_64-linux.tar.gz
+          fail_on_unmatched_files: true
+          append_body: true
+          body: "- `kubernetes-${{ needs.get-versions.outputs.k8s_tag }}-x86_64-linux.tar.gz` — Kubernetes (x86_64)"
+          make_latest: false
       - name: Trigger Pages update
         if: success()
         uses: peter-evans/repository-dispatch@v3

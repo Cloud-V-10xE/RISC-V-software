@@ -88,6 +88,15 @@ on:
           Must export ASSET_NAME and ASSET_PATH to $GITHUB_ENV when done.
         required: true
         type: string
+      publish-release:
+        description: >-
+          Attach the built asset to a release tagged release-YYYY-MM-DD,
+          creating that release if it does not exist yet. Without this a build
+          only produces a workflow artifact, which the website cannot see —
+          the Pages generator is built purely from GitHub Releases.
+        required: false
+        type: boolean
+        default: true
       trigger-pages:
         description: Send a repository_dispatch event to refresh GitHub Pages on success.
         required: false
@@ -225,6 +234,35 @@ jobs:
           path: ${{ env.ASSET_PATH }}
           if-no-files-found: error
           retention-days: 90
+
+      # Uploading a workflow artifact does not put a package on the website.
+      # update-pages.yml is generated purely from GitHub *Releases*, so a build
+      # that only produced an artifact would fire the Pages refresh below and
+      # regenerate an identical page — which is exactly what made a manual
+      # build appear to vanish.
+      #
+      # Publishing here composes with the monthly Central Release rather than
+      # replacing it: that job keeps collecting the newest artifact per package
+      # into its own curated release.
+      - name: Resolve release date
+        if: success() && inputs.publish-release
+        id: release-date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish asset to the dated release
+        if: success() && inputs.publish-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-${{ steps.release-date.outputs.date }}
+          files: ${{ env.ASSET_PATH }}
+          fail_on_unmatched_files: true
+          # name and body are deliberately unset. On a day when Central Release
+          # has already published, supplying either would overwrite its curated
+          # notes; append_body only ever adds a line.
+          append_body: true
+          body: "- `${{ env.ASSET_NAME }}` — ${{ inputs.package-name }}"
+          # The curated monthly release stays the one marked "Latest".
+          make_latest: false
 
       - name: Trigger Pages update
         if: success() && inputs.trigger-pages

@@ -4,6 +4,12 @@ on:
   repository_dispatch:
     types: [update-pages]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report which artifacts would be published, but publish nothing'
+        required: false
+        type: boolean
+        default: false
   workflow_run:
     workflows: ["Central Release"]
     types: [completed]
@@ -17,7 +23,142 @@ on:
       - .github/workflows/update-pages.yml
 
 jobs:
+  # Publishes binaries that were built successfully but never reached a
+  # release. Before builds published their own assets, a successful build left
+  # only a workflow artifact — invisible to this workflow, which generates the
+  # site purely from GitHub Releases. That stranded a large backlog of good
+  # binaries whose only route to the site was the monthly Central Release.
+  #
+  # This runs before the site is generated so anything it publishes appears in
+  # the same run. It is idempotent: an artifact whose file is already a release
+  # asset is skipped.
+  publish-artifacts:
+    name: Publish unreleased build artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # create releases and upload assets
+      actions: read     # list artifacts and check run conclusions
+    steps:
+      - name: Publish artifacts that never reached a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          echo "Collecting unexpired artifacts..."
+          gh api --paginate "repos/$GH_REPO/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false)
+                  | {name, id, created: .created_at, run: .workflow_run.id}' \
+            > /tmp/artifacts.jsonl
+
+          echo "Collecting names already published in a release..."
+          gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[].assets[].name' | sort -u > /tmp/published.txt || true
+          echo "  $(wc -l < /tmp/published.txt) assets already published"
+
+          # Pages deployments and build logs are not package binaries. Keeping
+          # only the newest artifact per name stops an old rebuild of the same
+          # version from being republished over a newer one.
+          jq -s 'map(select(.name | test("^github-pages-|^build-log|\\.log$") | not))
+                 | group_by(.name) | map(max_by(.created))
+                 | sort_by(.created) | reverse' \
+            /tmp/artifacts.jsonl > /tmp/candidates.json
+          echo "  $(jq length /tmp/candidates.json) candidate artifacts"
+
+          mkdir -p /tmp/dl
+          PUBLISHED=0; SKIPPED=0; FAILED=0
+          : > /tmp/report.txt
+
+          while read -r NAME RUN_ID CREATED; do
+            DATE="${CREATED%%T*}"
+
+            # An artifact can exist on a run that later failed, so confirm the
+            # run actually succeeded before treating its output as releasable.
+            CONCL=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID" \
+                      --jq '.conclusion // empty' 2>/dev/null || echo "")
+            if [ "$CONCL" != "success" ]; then
+              echo "  skip $NAME — run $RUN_ID concluded '${CONCL:-unknown}'"
+              SKIPPED=$((SKIPPED+1)); continue
+            fi
+
+            # Cheap check before an expensive one. For nearly every package the
+            # artifact is named after the file inside it, so this skips the
+            # already-published majority without downloading anything — the
+            # backlog here is 4.4 GB, and re-fetching it on every Pages refresh
+            # would be absurd.
+            if grep -qxF -- "$NAME" /tmp/published.txt; then
+              SKIPPED=$((SKIPPED+1)); continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  would publish $NAME -> release-${DATE}"
+              echo "| \`$NAME\` | release-${DATE} | would publish |" >> /tmp/report.txt
+              PUBLISHED=$((PUBLISHED+1)); continue
+            fi
+
+            rm -rf "/tmp/dl/work"; mkdir -p "/tmp/dl/work"
+            if ! gh run download "$RUN_ID" --repo "$GH_REPO" -n "$NAME" -D "/tmp/dl/work" 2>/dev/null; then
+              echo "  skip $NAME — could not download from run $RUN_ID"
+              FAILED=$((FAILED+1)); continue
+            fi
+
+            # The artifact is a zip; gh unpacks it, so the real filenames (and
+            # therefore the versions) come from inside it. That matters for
+            # artifacts whose own name lost the extension, e.g.
+            # kubernetes-v1.36.3-x86_64-linux -> ...-x86_64-linux.tar.gz
+            while IFS= read -r FILE; do
+              BASE="$(basename "$FILE")"
+              case "$BASE" in build.log|*.log) continue ;; esac
+
+              if grep -qxF -- "$BASE" /tmp/published.txt; then
+                SKIPPED=$((SKIPPED+1)); continue
+              fi
+
+              TAG="release-${DATE}"
+
+              # Create the release only if the tag is new; never touch the
+              # title or notes of one that already exists, so a Central Release
+              # published on the same day keeps its curated body.
+              if ! gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+                gh release create "$TAG" --repo "$GH_REPO" \
+                  --title "RISC-V Packages ${DATE}" \
+                  --notes "Binaries published from successful builds on ${DATE}." \
+                  --latest=false
+              fi
+
+              if gh release upload "$TAG" "$FILE" --repo "$GH_REPO" --clobber; then
+                echo "  published $BASE -> $TAG"
+                echo "| \`$BASE\` | $TAG | published |" >> /tmp/report.txt
+                echo "$BASE" >> /tmp/published.txt
+                PUBLISHED=$((PUBLISHED+1))
+              else
+                echo "::warning::failed to upload $BASE to $TAG"
+                FAILED=$((FAILED+1))
+              fi
+            done < <(find "/tmp/dl/work" -type f)
+          done < <(jq -r '.[] | "\(.name)\t\(.run)\t\(.created)"' /tmp/candidates.json | tr '\t' ' ')
+
+          {
+            echo "### Unreleased build artifacts"
+            echo
+            echo "- Published: **${PUBLISHED}**"
+            echo "- Skipped (already released, or run not successful): ${SKIPPED}"
+            echo "- Failed: ${FAILED}"
+            if [ -s /tmp/report.txt ]; then
+              echo
+              echo "| Asset | Release | Result |"
+              echo "|---|---|---|"
+              cat /tmp/report.txt
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "published=${PUBLISHED} skipped=${SKIPPED} failed=${FAILED}"
+
   build-and-deploy:
+    needs: publish-artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: read
