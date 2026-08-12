@@ -19,7 +19,7 @@ jobs:
       timeout-minutes: 720
       apt-packages: >-
         libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential
-        libcurl4-openssl-dev wget ccache python3 file
+        libcurl4-openssl-dev wget ccache python3 file xz-utils jq
       setup-script: |
         set -eux
         sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -31,22 +31,67 @@ jobs:
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
       build-script: |
         set -eux
-        git config --global http.postBuffer 524288000
-        git config --global http.maxRequests 2
-        git config --global core.compression 0
 
-        rm -rf "$GITHUB_WORKSPACE/node"
-        git clone --depth=1 --no-tags https://github.com/nodejs/node.git "$GITHUB_WORKSPACE/node"
-        cd "$GITHUB_WORKSPACE/node"
+        # ── Which Node to build ────────────────────────────────────────────
+        # Policy: track the active LTS line. If it has moved since we last
+        # published, build that. Otherwise spend the slot on the newest
+        # release instead of rebuilding an LTS we already ship.
+        #
+        # Resolution comes from nodejs.org/dist/index.json, not from git tags,
+        # because only the dist index records which releases are LTS. The old
+        # `git tag -l | sort -V | tail -1` had no notion of it and simply took
+        # the highest major, which is how this archive ended up publishing
+        # 25.x — the Current line, which never becomes LTS and stops getting
+        # fixes as soon as the next major ships.
+        DIST=$(curl -fsSL --retry 5 --retry-delay 10 https://nodejs.org/dist/index.json)
 
-        git fetch --tags --depth=1
-        # Strict vX.Y.Z only — a bare "v*" also matches -rc / -nightly tags and
-        # we do not want to publish a release candidate as the month's Node.
-        LATEST_TAG=$(git tag -l "v*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-        [ -n "$LATEST_TAG" ] || { echo "No stable Node tag found" >&2; exit 1; }
-        echo "Checking out $LATEST_TAG"
-        git fetch --depth=1 origin tag "$LATEST_TAG"
-        git checkout FETCH_HEAD
+        # "lts" is false for Current releases and a codename ("Krypton") for
+        # LTS ones. Sorted here rather than trusting the file's ordering.
+        LTS_VERSION=$(echo "$DIST" | jq -r '.[] | select(.lts != false) | .version' \
+          | sed 's/^v//' | sort -V | tail -n1)
+        LATEST_VERSION=$(echo "$DIST" | jq -r '.[].version' \
+          | sed 's/^v//' | sort -V | tail -n1)
+        [ -n "$LTS_VERSION" ] && [ -n "$LATEST_VERSION" ] \
+          || { echo "Could not resolve Node versions from the dist index" >&2; exit 1; }
+        echo "Active LTS: ${LTS_VERSION} | newest release: ${LATEST_VERSION}"
+
+        # What this archive already ships, read from the asset filenames. The
+        # call is deliberately unauthenticated: the repository is public, and
+        # exposing a repo-write token to a build script that then runs upstream
+        # build systems is not a trade worth making for one API lookup.
+        PUBLISHED=$(curl -fsSL --retry 3 --retry-delay 5 \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+          | jq -r '[.[].assets[].name | select(test("^nodejs-[0-9]"))] | .[]' \
+          | sed -E 's/^nodejs-([0-9][^-]*)-.*$/\1/' | sort -uV || true)
+        echo "Already published: ${PUBLISHED:-<none>}"
+
+        if echo "$PUBLISHED" | grep -qx -- "$LTS_VERSION"; then
+          VERSION="$LATEST_VERSION"
+          REASON="LTS ${LTS_VERSION} is already published; building the newest release instead"
+        else
+          VERSION="$LTS_VERSION"
+          REASON="new release on the LTS line"
+        fi
+        echo "Building Node ${VERSION} — ${REASON}"
+
+        # ── Fetch the source ───────────────────────────────────────────────
+        # Release tarball rather than a git clone: it is the exact version
+        # resolved above, it is ~55 MB instead of a full history, and it needs
+        # none of the http.postBuffer/compression tuning the clone required.
+        SRC="$GITHUB_WORKSPACE/node"
+        TARBALL="$GITHUB_WORKSPACE/node-v${VERSION}.tar.xz"
+        rm -rf "$SRC" "$TARBALL"
+
+        curl -fL -C - --retry 5 --retry-delay 10 --retry-all-errors \
+             --connect-timeout 30 -o "$TARBALL" \
+             "https://nodejs.org/dist/v${VERSION}/node-v${VERSION}.tar.xz"
+        # Catches a transfer that was cut short before it reaches the compiler.
+        tar -tf "$TARBALL" > /dev/null
+
+        mkdir -p "$SRC"
+        tar -xf "$TARBALL" -C "$SRC" --strip-components=1
+        rm -f "$TARBALL"
+        cd "$SRC"
 
         # ccache was already being installed but never wired up. Keep the cache
         # outside $GITHUB_WORKSPACE so it survives the workspace wipe and gives
@@ -69,7 +114,32 @@ jobs:
         "$GITHUB_WORKSPACE/installed_binaries/bin/node" -v
         file "$GITHUB_WORKSPACE/installed_binaries/bin/node"
 
+        # Version taken from the binary itself, not from the variable above, so
+        # the filename can never claim something the artifact is not. They must
+        # agree; if they do not, the source tree was not what we asked for.
         NODE_VERSION=$("$GITHUB_WORKSPACE/installed_binaries/bin/node" -v | cut -c 2-)
+        [ "$NODE_VERSION" = "$VERSION" ] || {
+          echo "Built Node ${NODE_VERSION} but requested ${VERSION}" >&2
+          exit 1
+        }
+
+        # Whether this build is LTS is worth recording somewhere durable — the
+        # version number alone only tells you if you happen to know that Node's
+        # even majors are the LTS ones.
+        if [ "$VERSION" = "$LTS_VERSION" ]; then
+          NODE_LINE="LTS"
+        else
+          NODE_LINE="Current (not LTS)"
+        fi
+        {
+          echo "### Node.js ${NODE_VERSION}"
+          echo
+          echo "- Line: **${NODE_LINE}**"
+          echo "- Active LTS at build time: ${LTS_VERSION}"
+          echo "- Newest release at build time: ${LATEST_VERSION}"
+          echo "- Selected because: ${REASON}"
+        } >> "$GITHUB_STEP_SUMMARY"
+
         ASSET_NAME="nodejs-${NODE_VERSION}-riscv64-linux.tar.gz"
         ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
         tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/installed_binaries" .
