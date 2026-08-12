@@ -97,8 +97,28 @@ jobs:
         # outside $GITHUB_WORKSPACE so it survives the workspace wipe and gives
         # the next monthly run a warm start.
         export CCACHE_DIR="$HOME/.ccache"
+
+        # V8 vendors Google Highway and its JSON stringifier asks for a 16-lane
+        # tag. Highway switches its EMU128 fallback off for GCC older than 16
+        # (a GCC vectoriser bug, fixed in 12.3 — Highway blocks conservatively),
+        # so on riscv64, where no RVV target is attainable either, the only
+        # target left is HWY_SCALAR. Its FixedTag holds exactly one lane, and
+        # the build dies with:
+        #   error: no matching function for call to
+        #   'Set(hwy::N_SCALAR::FixedTag<unsigned char, 16>&, int)'
+        #
+        # EMU128 is portable C++ with no intrinsics, so re-enabling it gives
+        # back 16-lane tags without assuming any vector hardware. That matters
+        # here: SG2042 implements RVV 0.7.1, not the RVV 1.0 Highway requires,
+        # so -march=rv64gcv would produce binaries the build host cannot run.
+        #
+        # Set on CXX as well as CXXFLAGS because gyp does not thread every
+        # environment variable through to every target, and one C++ file
+        # compiled without these defines is enough to fail the build.
+        HWY_FLAGS="-DHWY_BROKEN_EMU128=0 -DHWY_COMPILE_ONLY_EMU128"
         export CC="ccache gcc-14"
-        export CXX="ccache g++-14"
+        export CXX="ccache g++-14 ${HWY_FLAGS}"
+        export CXXFLAGS="${CXXFLAGS:-} ${HWY_FLAGS}"
         ccache -M 15G
         ccache -z
 
