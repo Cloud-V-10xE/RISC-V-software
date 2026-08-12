@@ -73,6 +73,9 @@ jobs:
           REASON="new release on the LTS line"
         fi
         echo "Building Node ${VERSION} — ${REASON}"
+        # Nothing to do if this exact Node is already published.
+        . "$GITHUB_WORKSPACE/.github/scripts/skip-if-published.sh" \
+            "nodejs-${VERSION}-riscv64-linux.tar.gz"
 
         # ── Fetch the source ───────────────────────────────────────────────
         # Release tarball rather than a git clone: it is the exact version

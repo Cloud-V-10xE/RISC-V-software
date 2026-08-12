@@ -210,7 +210,11 @@ jobs:
 
       # Without this, a build-script that exits 0 but never sets ASSET_PATH
       # hands upload-artifact an empty name and fails with an unrelated error.
+      # A build-script may stop early via skip-if-published.sh when the asset
+      # it would produce is already published. That is a success with nothing
+      # to upload, so everything downstream has to stand down too.
       - name: Verify build output
+        if: env.SKIP_BUILD != 'true'
         run: |
           set -eu
           if [ -z "${ASSET_NAME:-}" ] || [ -z "${ASSET_PATH:-}" ]; then
@@ -228,6 +232,7 @@ jobs:
           echo "Staged $ASSET_NAME ($(du -h "$ASSET_PATH" | cut -f1))"
 
       - name: Upload artifact
+        if: env.SKIP_BUILD != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ASSET_NAME }}
@@ -245,12 +250,12 @@ jobs:
       # replacing it: that job keeps collecting the newest artifact per package
       # into its own curated release.
       - name: Resolve release date
-        if: success() && inputs.publish-release
+        if: success() && inputs.publish-release && env.SKIP_BUILD != 'true'
         id: release-date
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Publish asset to the dated release
-        if: success() && inputs.publish-release
+        if: success() && inputs.publish-release && env.SKIP_BUILD != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ steps.release-date.outputs.date }}
@@ -265,7 +270,7 @@ jobs:
           make_latest: false
 
       - name: Trigger Pages update
-        if: success() && inputs.trigger-pages
+        if: success() && inputs.trigger-pages && env.SKIP_BUILD != 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

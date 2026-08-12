@@ -52,6 +52,9 @@ jobs:
           | sort -uV | tail -n1)
         [ -n "$VERSION" ] || { echo "Could not resolve an FFmpeg release" >&2; exit 1; }
         echo "Latest FFmpeg: $VERSION"
+        # Nothing to do if this exact FFmpeg is already published.
+        . "$GITHUB_WORKSPACE/.github/scripts/skip-if-published.sh" \
+            "ffmpeg-${VERSION}-riscv64-linux.tar.gz"
 
         SRC="$GITHUB_WORKSPACE/ffmpeg-src"
         TARBALL="$GITHUB_WORKSPACE/ffmpeg-${VERSION}.tar"
@@ -129,11 +132,23 @@ jobs:
         # `.option arch, +v` degrades silently to a scalar build that still
         # reports success, so check the generated config rather than trusting
         # the exit code.
-        if grep -q '^#define HAVE_RVV 1' ffbuild/config.h; then
-          echo "RVV enabled"
+        # configure writes the header to the build root, not ffbuild/ — that
+        # directory only holds config.mak and friends. Pointing at the wrong
+        # path made this guard fail on a perfectly good build, since a missing
+        # file greps the same as a disabled feature.
+        CONFIG_H="config.h"
+        [ -f "$CONFIG_H" ] || CONFIG_H="ffbuild/config.h"
+        if [ ! -f "$CONFIG_H" ]; then
+          echo "::error::configure produced no config.h — cannot verify RVV."
+          exit 1
+        fi
+
+        if grep -q '^#define HAVE_RVV 1' "$CONFIG_H"; then
+          echo "RVV enabled (via ${CONFIG_H})"
         else
           echo "::error::RVV is NOT enabled — the assembler likely does not support '.option arch, +v'."
           echo "Shipping this would be a scalar build masquerading as an optimised one."
+          grep -E '^#define HAVE_(RV|RVV)' "$CONFIG_H" || echo "  (no HAVE_RV* defines at all)"
           exit 1
         fi
 

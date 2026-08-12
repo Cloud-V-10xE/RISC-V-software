@@ -36,6 +36,9 @@ jobs:
           | tr -d '/' | sed 's/^gcc-//' | sort -uV | tail -n1)
         [ -n "$GCC_RELEASE" ] || { echo "Could not resolve a GCC release" >&2; exit 1; }
         echo "Latest GCC release: $GCC_RELEASE"
+        # GCC re-cuts the same version more than once; a rebuild of an already-published release costs ten hours of the Pioneer for nothing.
+        . "$GITHUB_WORKSPACE/.github/scripts/skip-if-published.sh" \
+            "gcc-${GCC_RELEASE}-riscv64-linux.tar.gz"
 
         SRC="$GITHUB_WORKSPACE/gcc-${GCC_RELEASE}"
         TARBALL="$GITHUB_WORKSPACE/gcc-${GCC_RELEASE}.tar.xz"
