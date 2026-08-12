@@ -68,6 +68,46 @@ jobs:
             echo "WARNING: no icons found — cards will fall back to monogram tiles"
           fi
 
+          # Derives the version to display for a release.
+          #
+          # Every release in this archive is tagged release-YYYY-MM-DD, which
+          # says nothing about what is inside it — a page listing six "releases"
+          # by date tells a visitor nothing about which GCC they are getting.
+          # The version is therefore recovered from the asset filename, which
+          # does carry it (gcc-16.1.0-riscv64-linux.tar.gz). The date is used
+          # only when nothing else can be derived.
+          #
+          # Order: asset-derived version -> a tag that already looks like a
+          # version -> the publication date.
+          release_version() {
+            local pkg="$1" asset="$2" tag="$3" date="$4" v first
+            v="$asset"
+            for ext in .tar.gz .tar.xz .tar.bz2 .tgz .zip .whl .deb; do v="${v%$ext}"; done
+            case "$v" in
+              "${pkg}-"*) v="${v#${pkg}-}" ;;
+              *)
+                # The asset prefix does not always equal the package id
+                # (pytorch-* for torch), so drop leading all-alphabetic
+                # segments until something with a digit in it shows up.
+                while :; do
+                  case "$v" in
+                    *-*) first="${v%%-*}"
+                         case "$first" in *[!a-zA-Z]*) break ;; esac
+                         v="${v#*-}" ;;
+                    *) break ;;
+                  esac
+                done ;;
+            esac
+            # Platform and ABI suffixes: -riscv64-linux, _riscv64, -x86_64,
+            # -py3-none, -cp312-cp312 and friends.
+            for suffix in -riscv64 _riscv64 -x86_64 _x86_64 -aarch64 -amd64 -arm64 -py3 -cp3 -linux; do
+              v="${v%%${suffix}*}"
+            done
+            case "$v" in *[0-9]*) printf '%s' "$v"; return 0 ;; esac
+            case "$tag" in *[0-9].[0-9]*) printf '%s' "$tag"; return 0 ;; esac
+            printf '%s' "$date"
+          }
+
           # Renders the icon tile for a package. Emits a masked SVG mark when the
           # package has one, otherwise a monogram tile using the first two
           # characters of the label. $2 adds a modifier class (e.g. pkg-icon-lg).
@@ -277,7 +317,13 @@ jobs:
               echo "<div class='pkg-grid'>"
               for PKG in "${ALL_PKGS[@]}"; do
                 if [ "${PKG_CATEGORY[$PKG]}" = "$CAT" ]; then
-                  LATEST=$(jq -r '.[0].tag // ""' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "")
+                  LATEST_TAG=$(jq -r '.[0].tag // ""' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "")
+                  LATEST_DATE=$(jq -r '.[0].date[0:10] // ""' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "")
+                  LATEST_ASSET=$(jq -r '.[0] | ((.assets | map(select(.name | test("riscv64"))) | .[0].name) // .assets[0].name // "")' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "")
+                  LATEST=""
+                  if [ -n "$LATEST_TAG" ]; then
+                    LATEST=$(release_version "$PKG" "$LATEST_ASSET" "$LATEST_TAG" "$LATEST_DATE")
+                  fi
                   COUNT=$(jq 'length' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "0")
                   cat << CARD
           <a class="pkg-card"
@@ -358,14 +404,15 @@ jobs:
               echo "<div class='section-title'>Releases (${COUNT})</div>"
               if [ "$COUNT" -gt 0 ]; then
                 echo "<table><thead><tr>"
-                echo "  <th>Release Tag</th><th>Date</th><th>Assets</th><th></th>"
+                echo "  <th>Version</th><th>Date</th><th>Assets</th><th></th>"
                 echo "</tr></thead><tbody>"
-                jq -r '.[] | "\(.tag)\t\(.date)\t\(.url)\t\(.assets | length)"' "$RELEASES_FILE" \
-                  | while IFS=$'\t' read -r TAG DATE RURL NASSETS; do
+                jq -r '.[] | "\(.tag)\t\(.date)\t\(.url)\t\(.assets | length)\t\(((.assets | map(select(.name | test("riscv64"))) | .[0].name) // .assets[0].name // ""))"' "$RELEASES_FILE" \
+                  | while IFS=$'\t' read -r TAG DATE RURL NASSETS FIRST_ASSET; do
                     DATESTR=$(echo "$DATE" | cut -c1-10)
+                    VERSION=$(release_version "$PKG" "$FIRST_ASSET" "$TAG" "$DATESTR")
                     cat << ROW
           <tr>
-            <td><span class="mono">${TAG}</span></td>
+            <td><span class="mono">${VERSION}</span></td>
             <td><span class="mono">${DATESTR}</span></td>
             <td><span class="badge">${NASSETS} file(s)</span></td>
             <td><a class="dl-btn" href="${BASE}/${PKG}/${TAG}/">view &rarr;</a></td>
@@ -392,6 +439,11 @@ jobs:
               DATE=$(echo "$RELEASE"  | jq -r '.date' | cut -c1-10)
               RDATE=$(echo "$RELEASE" | jq -r '.date')
               RURL=$(echo "$RELEASE"  | jq -r '.url')
+              FIRST_ASSET=$(echo "$RELEASE" | jq -r '((.assets | map(select(.name | test("riscv64"))) | .[0].name) // .assets[0].name // "")')
+              # Displayed everywhere the tag used to be. The URL keeps the tag:
+              # it is unique per release, whereas two releases can carry the
+              # same upstream version, and changing it would break links.
+              VERSION=$(release_version "$PKG" "$FIRST_ASSET" "$TAG" "$DATE")
 
               mkdir -p "_site/${PKG}/${TAG}"
 
@@ -410,14 +462,14 @@ jobs:
               fi
 
               {
-                page_head "${LABEL} ${TAG}" "false"
+                page_head "${LABEL} ${VERSION}" "false"
                 cat << HTML
           <div class="container">
             <div class="breadcrumb">
               <a href="${BASE}/">index</a><span>/</span>
-              <a href="${BASE}/${PKG}/">${PKG}</a><span>/</span>${TAG}
+              <a href="${BASE}/${PKG}/">${PKG}</a><span>/</span>${VERSION}
             </div>
-            <h1>${LABEL} <span style="font-weight:300;color:var(--text-muted)">${TAG}</span></h1>
+            <h1>${LABEL} <span style="font-weight:300;color:var(--text-muted)">${VERSION}</span></h1>
             <p class="page-desc">
               Released ${DATE} &middot;
               <a href="${RURL}">View GitHub Release</a>
@@ -457,9 +509,14 @@ jobs:
                 echo "</tbody></table>"
 
 
-                # Installation instructions
-                FIRST_ASSET=$(echo "$RELEASE" | jq -r '.assets[0].name // ""')
-                FIRST_URL=$(echo "$RELEASE"   | jq -r '.assets[0].url  // ""')
+                # Installation instructions.
+                # Name and URL must come from the SAME asset: a kubernetes
+                # release carries both riscv64 and x86_64 tarballs, so picking
+                # them independently can print one filename and wget the other.
+                PRIMARY_ASSET=$(echo "$RELEASE" | jq -c \
+                  '((.assets | map(select(.name | test("riscv64"))) | .[0]) // .assets[0] // {})')
+                FIRST_ASSET=$(echo "$PRIMARY_ASSET" | jq -r '.name // ""')
+                FIRST_URL=$(echo "$PRIMARY_ASSET"   | jq -r '.url  // ""')
                 if [ "${PKG_INSTALL_TYPE[$PKG]}" = "docker" ] || [ -n "$FIRST_URL" ]; then
                   echo "<div class='section-title'>Installation</div>"
                   echo "<div class='install-block'><code>"

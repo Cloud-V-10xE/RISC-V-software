@@ -34,7 +34,7 @@ jobs:
         libopus-dev libvorbis-dev libmp3lame-dev
         libass-dev libfreetype6-dev libfontconfig1-dev
         libssl-dev zlib1g-dev libbz2-dev liblzma-dev
-        libsvtav1-dev librav1e-dev
+        libsvtav1enc-dev librav1e-dev
       build-script: |
         set -eux
 
