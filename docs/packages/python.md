@@ -9,7 +9,7 @@ Python 3.13 is the latest stable release of the Python programming language, fea
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/python-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/python-<version>-riscv64-linux.tar.gz
 sudo tar -xzf python-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

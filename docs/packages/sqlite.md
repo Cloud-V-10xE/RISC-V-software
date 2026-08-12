@@ -9,7 +9,7 @@ While SQLite is available in apt, the prebuilt binary here provides the latest v
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/sqlite-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/sqlite-<version>-riscv64-linux.tar.gz
 sudo tar -xzf sqlite-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

@@ -16,24 +16,55 @@ jobs:
       package-name: binutils RISC-V
       apt-packages: >-
         build-essential libatomic1 libgmp-dev libmpfr-dev libmpc-dev texinfo
-        bison flex libtool autoconf automake patch libncurses5-dev
+        bison flex libtool autoconf automake patch libncurses5-dev xz-utils
       build-script: |
         set -eux
-        git config --global http.postBuffer 524288000
-        git config --global http.maxRequests 2
-        git config --global core.compression 0
-
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
 
-        rm -rf "$GITHUB_WORKSPACE/binutils-gdb"
-        git clone --depth=1 --no-tags git://sourceware.org/git/binutils-gdb.git "$GITHUB_WORKSPACE/binutils-gdb"
-        cd "$GITHUB_WORKSPACE/binutils-gdb"
+        # This used to clone binutils-gdb and check out the newest
+        # `gdb-*-release` tag. binutils and gdb share that repository but not
+        # their release cadence, so a GDB release tag carries binutils at a
+        # *development* version — which is why this archive shipped
+        # "binutils 2.45.50", a snapshot, sitting next to stable packages with
+        # nothing marking it as such. Real binutils releases are 2.45.1, 2.46,
+        # 2.47; none of them are reachable from a gdb-* tag.
+        #
+        # Taking the release tarball fixes the version and drops the
+        # git://sourceware.org clone, which is unauthenticated git-protocol and
+        # blocked on many networks.
+        BINUTILS_RELEASE=$(curl -fsSL --retry 5 --retry-delay 10 https://ftp.gnu.org/gnu/binutils/ \
+          | grep -oE 'binutils-[0-9]+\.[0-9]+(\.[0-9]+)?\.tar\.xz' \
+          | sed 's/^binutils-//;s/\.tar\.xz$//' | sort -uV | tail -n1)
+        [ -n "$BINUTILS_RELEASE" ] || { echo "Could not resolve a binutils release" >&2; exit 1; }
+        echo "Latest binutils release: $BINUTILS_RELEASE"
 
-        git fetch --tags --depth=1
-        LATEST_TAG=$(git tag -l "gdb-*-release" | sort -V | tail -n 1)
-        echo "Checking out $LATEST_TAG"
-        git fetch --depth=1 origin tag "$LATEST_TAG"
-        git checkout FETCH_HEAD
+        . "$GITHUB_WORKSPACE/.github/scripts/skip-if-published.sh" \
+            "binutils-${BINUTILS_RELEASE}-riscv64-linux.tar.gz"
+
+        SRC="$GITHUB_WORKSPACE/binutils-${BINUTILS_RELEASE}"
+        TARBALL="$GITHUB_WORKSPACE/binutils-${BINUTILS_RELEASE}.tar.xz"
+        rm -rf "$SRC" "$TARBALL"
+
+        for BASE in https://ftpmirror.gnu.org/binutils \
+                    https://ftp.gnu.org/gnu/binutils \
+                    https://mirrors.kernel.org/gnu/binutils; do
+          echo "Fetching from ${BASE}"
+          if curl -fL -C - --retry 5 --retry-delay 10 --retry-all-errors \
+                  --connect-timeout 30 -o "$TARBALL" \
+                  "${BASE}/binutils-${BINUTILS_RELEASE}.tar.xz" \
+             && tar -tf "$TARBALL" > /dev/null; then
+            echo "Got a complete tarball from ${BASE}"
+            break
+          fi
+          echo "${BASE} did not yield a usable tarball; trying the next mirror"
+          rm -f "$TARBALL"
+        done
+        [ -s "$TARBALL" ] || { echo "No mirror served a complete binutils tarball" >&2; exit 1; }
+
+        mkdir -p "$SRC"
+        tar -xf "$TARBALL" -C "$SRC" --strip-components=1
+        rm -f "$TARBALL"
+        cd "$SRC"
 
         mkdir -p build
         cd build

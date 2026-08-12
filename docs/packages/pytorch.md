@@ -9,7 +9,7 @@ PyPI does not distribute riscv64 wheels for PyTorch. Building from source requir
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/pytorch-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/pytorch-<version>-riscv64-linux.tar.gz
 tar -xzf pytorch-<version>-riscv64-linux.tar.gz
 pip install torch-*.whl
 ```

@@ -9,7 +9,7 @@ Ruby is a dynamic, object-oriented programming language designed for developer h
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/ruby-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/ruby-<version>-riscv64-linux.tar.gz
 sudo tar -xzf ruby-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

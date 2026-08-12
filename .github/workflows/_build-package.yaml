@@ -111,6 +111,8 @@ jobs:
     permissions:
       contents: write
       actions: write
+      id-token: write      # required by attest-build-provenance
+      attestations: write  # required by attest-build-provenance
 
     # Never let a manual dispatch race the scheduled run of the same package.
     # cancel-in-progress stays false: these builds take hours and a half-built
@@ -249,6 +251,36 @@ jobs:
       # Publishing here composes with the monthly Central Release rather than
       # replacing it: that job keeps collecting the newest artifact per package
       # into its own curated release.
+      # A stranger is being asked to untar this into /usr/local. Without a
+      # checksum they cannot tell a good download from a truncated or swapped
+      # one, and without provenance they cannot tell this archive's build from
+      # anyone else's upload. Both are cheap; neither existed.
+      - name: Checksum the asset
+        if: success() && env.SKIP_BUILD != 'true'
+        run: |
+          set -eu
+          cd "$(dirname "$ASSET_PATH")"
+          sha256sum "$(basename "$ASSET_PATH")" > "${ASSET_NAME}.sha256"
+          cat "${ASSET_NAME}.sha256"
+          echo "ASSET_SHA256_PATH=$(pwd)/${ASSET_NAME}.sha256" >> "$GITHUB_ENV"
+          {
+            echo "### Checksum"
+            echo
+            echo '```'
+            cat "${ASSET_NAME}.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Signs a statement that this exact file came from this workflow, at this
+      # commit, on this runner. Verifiable with:
+      #   gh attestation verify <file> --repo <owner>/<repo>
+      - name: Attest build provenance
+        if: success() && inputs.publish-release && env.SKIP_BUILD != 'true'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ASSET_PATH }}
+
       - name: Resolve release date
         if: success() && inputs.publish-release && env.SKIP_BUILD != 'true'
         id: release-date
@@ -259,7 +291,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ steps.release-date.outputs.date }}
-          files: ${{ env.ASSET_PATH }}
+          files: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.ASSET_SHA256_PATH }}
           fail_on_unmatched_files: true
           # name and body are deliberately unset. On a day when Central Release
           # has already published, supplying either would overwrite its curated

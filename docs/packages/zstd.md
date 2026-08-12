@@ -9,7 +9,7 @@ While `apt install zstd` exists, it ships older versions. More critically, zstd 
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/zstd-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/zstd-<version>-riscv64-linux.tar.gz
 sudo tar -xzf zstd-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

@@ -9,7 +9,7 @@ strace on RISC-V requires architecture-specific syscall tables and register deco
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/strace-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/strace-<version>-riscv64-linux.tar.gz
 sudo tar -xzf strace-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

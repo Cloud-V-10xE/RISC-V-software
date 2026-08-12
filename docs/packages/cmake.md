@@ -9,7 +9,7 @@ CMake is the de facto standard build system generator for C and C++ projects. It
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/cmake-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/cmake-<version>-riscv64-linux.tar.gz
 sudo tar -xzf cmake-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

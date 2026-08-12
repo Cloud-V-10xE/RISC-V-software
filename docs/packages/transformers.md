@@ -9,7 +9,7 @@ Transformers itself is pure Python but its dependencies (tokenizers, safetensors
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/transformers-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/transformers-<version>-riscv64-linux.tar.gz
 tar -xzf transformers-<version>-riscv64-linux.tar.gz
 pip install *.whl
 ```

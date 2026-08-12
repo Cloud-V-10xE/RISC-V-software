@@ -39,6 +39,29 @@ wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/download/<tag>/gcc
 tar -xzf gcc-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 
+### Verify what you downloaded
+
+You are unpacking a binary from the internet into `/usr/local`. Check it first.
+
+**Checksum** — every asset is published with a `.sha256` beside it:
+
+```bash
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/download/<tag>/gcc-<version>-riscv64-linux.tar.gz.sha256
+sha256sum -c gcc-<version>-riscv64-linux.tar.gz.sha256
+```
+
+**Provenance** — each binary is signed with a build attestation recording the
+workflow, commit and runner that produced it. This proves the file came from a
+build in this repository rather than from someone with upload access:
+
+```bash
+gh attestation verify gcc-<version>-riscv64-linux.tar.gz --repo Cloud-V-10xE/RISC-V-software
+```
+
+A checksum tells you the download is intact; the attestation tells you where it
+came from. Attestations cover assets built after this was introduced, so older
+releases carry checksums only.
+
 ### Use a Docker image
 
 All Docker images are multi-arch (amd64 + riscv64):

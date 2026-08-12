@@ -118,7 +118,7 @@ Open a PR with all four changes. The PR description should include:
 
 1. Check the workflow run logs in the Actions tab
 2. Identify which step failed and why
-3. Common causes and fixes are documented in [docs/architecture.md](architecture.md)
+3. Common causes and fixes are documented in [docs/architecture.md](docs/architecture.md)
 4. Fix the workflow file and open a PR
 
 If the build fails because an upstream version changed (e.g. a new Go version

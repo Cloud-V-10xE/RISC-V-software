@@ -9,7 +9,7 @@ No riscv64 wheel exists on PyPI for onnxruntime. It is widely used for deploying
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/onnxruntime-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/onnxruntime-<version>-riscv64-linux.tar.gz
 tar -xzf onnxruntime-<version>-riscv64-linux.tar.gz
 pip install onnxruntime-*.whl
 ```

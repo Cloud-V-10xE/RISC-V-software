@@ -9,7 +9,7 @@ No prebuilt riscv64 gRPC binary exists anywhere. gRPC is required by Kubernetes 
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/grpc-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/grpc-<version>-riscv64-linux.tar.gz
 sudo tar -xzf grpc-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

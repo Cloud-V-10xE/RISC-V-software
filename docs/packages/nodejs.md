@@ -9,7 +9,7 @@ The official Node.js releases at nodejs.org do not include riscv64 binaries. Dev
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/nodejs-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/nodejs-<version>-riscv64-linux.tar.gz
 sudo tar -xzf nodejs-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

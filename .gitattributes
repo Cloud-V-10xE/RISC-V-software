@@ -1,0 +1,8 @@
+# The vendored actions/runner fork is upstream C#, not this project's code.
+# Without this, GitHub reports the repository as ~95% C# and the RISC-V
+# packaging work — shell and YAML — is invisible on the repo front page.
+github-runner-riscv/** linguist-vendored
+github-actions-riscv/** linguist-vendored
+
+# Generated site assets should not skew the language stats either.
+.github/pages/icons/*.svg linguist-generated

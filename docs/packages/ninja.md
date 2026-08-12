@@ -9,7 +9,7 @@ Ninja is a small, focused build system designed for speed. Used as the backend f
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/ninja-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/ninja-<version>-riscv64-linux.tar.gz
 sudo tar -xzf ninja-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

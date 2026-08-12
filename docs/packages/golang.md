@@ -9,7 +9,7 @@ The official Go releases at go.dev/dl do not include riscv64 binaries. Every Go-
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/golang-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/golang-<version>-riscv64-linux.tar.gz
 sudo tar -xzf golang-<version>-riscv64-linux.tar.gz -C /usr/local/
 export PATH=/usr/local/go/bin:$PATH
 ```

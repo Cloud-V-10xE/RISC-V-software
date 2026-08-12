@@ -9,7 +9,7 @@ No official riscv64 binary exists for protoc. Protobuf is a dependency of gRPC, 
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/protobuf-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/protobuf-<version>-riscv64-linux.tar.gz
 sudo tar -xzf protobuf-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

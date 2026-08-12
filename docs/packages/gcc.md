@@ -9,7 +9,7 @@ GCC is the standard compiler for Linux systems, supporting C, C++, Fortran, Go, 
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/gcc-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/gcc-<version>-riscv64-linux.tar.gz
 sudo tar -xzf gcc-<version>-riscv64-linux.tar.gz -C /usr/local/
 ```
 

@@ -9,7 +9,7 @@ Microsoft does not publish official .NET binaries for riscv64. Building .NET fro
 ## Installation
 
 ```bash
-wget https://github.com/Cloud-V-10xE/RISC-V-softwares/releases/latest/download/dotnet-sdk-<version>-riscv64-linux.tar.gz
+wget https://github.com/Cloud-V-10xE/RISC-V-software/releases/latest/download/dotnet-sdk-<version>-riscv64-linux.tar.gz
 mkdir -p $HOME/.dotnet
 tar -xzf dotnet-sdk-<version>-riscv64-linux.tar.gz -C $HOME/.dotnet
 export PATH=$HOME/.dotnet:$PATH

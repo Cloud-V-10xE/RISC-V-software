@@ -435,7 +435,7 @@ jobs:
             cat << HTML
           <div class="container">
             <div class="breadcrumb">
-              <a href="${BASE}/">cloud-v-10xe.github.io/RISC-V-softwares</a>
+              <a href="${BASE}/">cloud-v-10xe.github.io/RISC-V-software</a>
             </div>
             <h1>RISC-V Package Archive</h1>
             <p class="page-desc">
@@ -466,6 +466,19 @@ jobs:
                     LATEST=$(release_version "$PKG" "$LATEST_ASSET" "$LATEST_TAG" "$LATEST_DATE")
                   fi
                   COUNT=$(jq 'length' "/tmp/${PKG}_releases.json" 2>/dev/null || echo "0")
+
+                  # A container package has no release assets by design — it ships
+                  # images. Rendering "0 release(s)" made etcd, the kube-* components
+                  # and the runner image all look broken when they are in fact
+                  # published and pullable.
+                  #
+                  # A tarball package with nothing published is a different matter: it
+                  # has genuinely never produced a binary, and an empty card is worse
+                  # than no card, so it stays out of the index until a build succeeds.
+                  if [ "$COUNT" -eq 0 ] && [ "${PKG_INSTALL_TYPE[$PKG]}" != "docker" ]; then
+                    echo "  ${PKG}: no releases yet — omitted from the index" >&2
+                    continue
+                  fi
                   cat << CARD
           <a class="pkg-card"
              href="${BASE}/${PKG}/"
@@ -481,8 +494,19 @@ jobs:
           CARD
                   if [ -n "$LATEST" ]; then
                     echo "    <span class='badge badge-green'>${LATEST}</span>"
+                    # A version carrying letters among the numbers is a pre-release:
+                    # PyTorch's 2.11.0a0+git70d99e9 is an alpha snapshot, and unlabelled
+                    # beside stable versions it reads as a normal release.
+                    case "$LATEST" in
+                      *[0-9]*[a-zA-Z]*|*rc*|*alpha*|*beta*|*dev*)
+                        echo "    <span class='badge badge-warn'>pre-release</span>" ;;
+                    esac
                   fi
-                  echo "    <span class='badge'>${COUNT} release(s)</span>"
+                  if [ "${PKG_INSTALL_TYPE[$PKG]}" = "docker" ]; then
+                    echo "    <span class='badge'>container image</span>"
+                  else
+                    echo "    <span class='badge'>${COUNT} release(s)</span>"
+                  fi
                   echo "  </div></a>"
                 fi
               done
