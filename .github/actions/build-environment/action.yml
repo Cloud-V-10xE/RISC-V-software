@@ -1,0 +1,149 @@
+name: Build environment
+description: >-
+  Records the host and toolchain a package was built on, to the job log and to
+  the run summary. Consumers of a prebuilt binary cannot inspect the machine it
+  came from, so glibc, kernel and compiler versions are the difference between
+  "this runs on my board" and an unexplained failure to start.
+
+inputs:
+  package-name:
+    description: Label for the package being built, shown in the report heading.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Record build environment
+      shell: bash
+      run: |
+        # A diagnostic must never be the reason a 10-hour build fails, so this
+        # runs without -e and every probe tolerates a missing tool.
+        set +e
+
+        have() { command -v "$1" >/dev/null 2>&1; }
+        # First line only: most --version output is a paragraph.
+        ver() {
+          if have "$1"; then "$@" 2>&1 | head -n1; else echo "not installed"; fi
+        }
+
+        OS_NAME="unknown"
+        if [ -r /etc/os-release ]; then
+          . /etc/os-release
+          OS_NAME="${PRETTY_NAME:-${NAME:-unknown}}"
+        fi
+
+        KERNEL="$(uname -r 2>/dev/null)"
+        ARCH="$(uname -m 2>/dev/null)"
+        DEB_ARCH="$(dpkg --print-architecture 2>/dev/null || echo n/a)"
+
+        # glibc decides whether the artifact starts at all on a user's machine:
+        # it is backward compatible, not forward, so a binary built against a
+        # newer glibc than the target has simply will not run.
+        # getconf reports "glibc 2.39"; ldd reports a whole sentence ending in
+        # the version. Normalise both to the bare number so it reads correctly
+        # wherever it is interpolated.
+        GLIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $NF}')"
+        [ -n "$GLIBC" ] || GLIBC="$(ldd --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+        [ -n "$GLIBC" ] || GLIBC="unknown"
+
+        CORES="$(nproc 2>/dev/null || echo '?')"
+        MEM="$(awk '/^MemTotal:/ {printf "%.1f GiB", $2/1024/1024}' /proc/meminfo 2>/dev/null)"
+        [ -n "$MEM" ] || MEM="unknown"
+
+        # On riscv64 the ISA string is the interesting part — it says which
+        # extensions the build host actually had.
+        CPU="$(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)"
+        ISA="$(awk -F': ' '/^isa/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)"
+        UARCH="$(awk -F': ' '/^uarch/ {print $2; exit}' /proc/cpuinfo 2>/dev/null)"
+        [ -n "$CPU" ] || CPU="${UARCH:-unknown}"
+
+        CONTAINER="no"
+        [ -f /.dockerenv ] && CONTAINER="yes"
+
+        # This step cannot see CC/CXX exported inside a later build-script step
+        # — those live in that step's own shell. So report what is installed as
+        # well as the default, because several packages pin a specific series
+        # (Node uses gcc-14). The pinned choice is echoed by the build script's
+        # own `set -x` output further down the log.
+        ENV_CC="${CC:-<job default>}"
+        ENV_CXX="${CXX:-<job default>}"
+        ENV_CFLAGS="${CFLAGS:-<none>}"
+        ENV_CXXFLAGS="${CXXFLAGS:-<none>}"
+        GCC_ALTS="$(ls -1 /usr/bin/gcc-[0-9]* 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
+        [ -n "$GCC_ALTS" ] || GCC_ALTS="none besides the default"
+
+        HEADING="Build environment"
+        if [ -n "${{ inputs.package-name }}" ]; then
+          HEADING="Build environment — ${{ inputs.package-name }}"
+        fi
+
+        # Emitted twice on purpose: the log is where someone debugging a failed
+        # build looks, the summary is where someone choosing a download looks.
+        emit() {
+          echo "=== ${HEADING} ==="
+          echo
+          echo "Host"
+          echo "  OS                 ${OS_NAME}"
+          echo "  Kernel             ${KERNEL}"
+          echo "  Architecture       ${ARCH} (dpkg: ${DEB_ARCH})"
+          echo "  CPU                ${CPU}"
+          [ -n "$ISA" ] && echo "  ISA                ${ISA}"
+          echo "  Cores / memory     ${CORES} / ${MEM}"
+          echo "  In container       ${CONTAINER}"
+          echo "  Runner             ${RUNNER_NAME:-unknown}"
+          echo
+          echo "Runtime"
+          echo "  glibc              ${GLIBC}"
+          echo "  ld.so              $(ver ldd --version)"
+          echo
+          echo "Toolchain"
+          echo "  cc (default)       $(ver cc --version)"
+          echo "  gcc                $(ver gcc --version)"
+          echo "  g++                $(ver g++ --version)"
+          echo "  clang              $(ver clang --version)"
+          echo "  binutils ld        $(ver ld --version)"
+          echo "  make               $(ver make --version)"
+          echo "  cmake              $(ver cmake --version)"
+          echo "  ninja              $(ver ninja --version)"
+          echo "  pkg-config         $(ver pkg-config --version)"
+          echo "  python3            $(ver python3 --version)"
+          echo "  go                 $(ver go version)"
+          echo "  rustc              $(ver rustc --version)"
+          echo
+          echo "Compiler selection"
+          echo "  CC                 ${ENV_CC}"
+          echo "  CXX                ${ENV_CXX}"
+          echo "  CFLAGS             ${ENV_CFLAGS}"
+          echo "  CXXFLAGS           ${ENV_CXXFLAGS}"
+          echo "  gcc versions here  ${GCC_ALTS}"
+        }
+
+        emit
+
+        {
+          echo "### ${HEADING}"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| OS | ${OS_NAME} |"
+          echo "| Kernel | \`${KERNEL}\` |"
+          echo "| Architecture | \`${ARCH}\` |"
+          echo "| CPU | ${CPU} |"
+          [ -n "$ISA" ] && echo "| ISA | \`${ISA}\` |"
+          echo "| Cores / memory | ${CORES} / ${MEM} |"
+          echo "| **glibc** | **${GLIBC}** |"
+          echo "| gcc | $(ver gcc --version) |"
+          echo "| g++ | $(ver g++ --version) |"
+          echo "| binutils | $(ver ld --version) |"
+          echo "| cmake | $(ver cmake --version) |"
+          echo "| python3 | $(ver python3 --version) |"
+          echo "| go | $(ver go version) |"
+          echo "| rustc | $(ver rustc --version) |"
+          echo "| CC / CXX | \`${ENV_CC}\` / \`${ENV_CXX}\` |"
+          echo
+          echo "glibc is backward compatible but not forward compatible: this build runs on"
+          echo "a system with glibc ${GLIBC} or newer, and will not start on anything older."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        exit 0

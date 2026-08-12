@@ -60,6 +60,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: Kubernetes (x86_64)
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:

@@ -48,6 +48,16 @@ jobs:
       matrix:
         component: [kube-apiserver, kube-controller-manager, kube-scheduler, kube-proxy]
     steps:
+      - name: Checkout repo (for the local build-environment action)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: Kubernetes components (x86_64)
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -117,6 +127,16 @@ jobs:
       matrix:
         component: [kube-apiserver, kube-controller-manager, kube-scheduler, kube-proxy]
     steps:
+      - name: Checkout repo (for the local build-environment action)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: Kubernetes components (riscv64)
+
       - name: Login to Docker Hub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \

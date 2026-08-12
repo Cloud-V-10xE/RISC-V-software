@@ -170,6 +170,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: GitHub Actions runner image
+
       - name: Login to Docker Hub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" \

@@ -191,6 +191,11 @@ jobs:
         if: inputs.setup-script != ''
         run: ${{ inputs.setup-script }}
 
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: ${{ inputs.package-name }}
+
       - name: Build ${{ inputs.package-name }}
         run: ${{ inputs.build-script }}
 

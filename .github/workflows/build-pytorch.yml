@@ -45,6 +45,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: PyTorch RISC-V
+
       - name: Setup directories
         run: mkdir -p $GITHUB_WORKSPACE/build_output
 
