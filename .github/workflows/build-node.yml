@@ -98,6 +98,62 @@ jobs:
         rm -f "$TARBALL"
         cd "$SRC"
 
+        # ── V8 riscv64: FloatMinMaxHelper has no external linkage ──────────
+        # V8 defines MacroAssembler::FloatMinMaxHelper as a template in
+        # macro-assembler-riscv.cc and instantiates it only implicitly, from
+        # uses inside that same file. From Node 26 onward maglev calls it from
+        # maglev-ir-riscv.cc, so the link fails:
+        #
+        #   maglev-ir-riscv.o: undefined reference to
+        #   `void v8::internal::MacroAssembler::FloatMinMaxHelper<double>(...)'
+        #
+        # Node 24 LTS is unaffected — its maglev never calls it. Upstream has
+        # not fixed this on main as of this writing.
+        #
+        # The patch is deliberately conditional on the bug still being present:
+        # if upstream adds the instantiation, or maglev stops calling it, both
+        # guards go false and nothing is applied. Nothing here needs removing
+        # when that happens.
+        MA_FILE="deps/v8/src/codegen/riscv/macro-assembler-riscv.cc"
+        MAGLEV_FILE="deps/v8/src/maglev/riscv/maglev-ir-riscv.cc"
+        if [ -f "$MA_FILE" ] && [ -f "$MAGLEV_FILE" ] \
+           && grep -q 'FloatMinMaxHelper' "$MAGLEV_FILE" \
+           && ! grep -qE '^template void MacroAssembler::FloatMinMaxHelper' "$MA_FILE"; then
+          echo "Patching $MA_FILE: adding explicit FloatMinMaxHelper instantiations"
+
+          # printf rather than a heredoc: a heredoc body has to sit at column 0,
+          # which would terminate this YAML block scalar.
+          PATCH_TMP="$(mktemp)"
+          {
+            printf '%s\n' ''
+            printf '%s\n' '// Added by Cloud-V-10xE/RISC-V-software. V8 instantiates this template'
+            printf '%s\n' '// only implicitly within this translation unit, so maglev callers cannot'
+            printf '%s\n' '// link against it. Both specialisations are already used above, so naming'
+            printf '%s\n' '// them here changes no codegen - it only gives them external linkage.'
+            printf '%s\n' 'template void MacroAssembler::FloatMinMaxHelper<float>('
+            printf '%s\n' '    FPURegister, FPURegister, FPURegister, MaxMinKind);'
+            printf '%s\n' 'template void MacroAssembler::FloatMinMaxHelper<double>('
+            printf '%s\n' '    FPURegister, FPURegister, FPURegister, MaxMinKind);'
+          } > "$PATCH_TMP"
+
+          # Insert before the trailing `#undef __` so the definitions land
+          # inside namespace v8::internal, where the template was declared.
+          awk -v pf="$PATCH_TMP" '
+            /^#undef __$/ && !done { while ((getline l < pf) > 0) print l; done = 1 }
+            { print }
+          ' "$MA_FILE" > "${MA_FILE}.patched"
+          mv "${MA_FILE}.patched" "$MA_FILE"
+          rm -f "$PATCH_TMP"
+
+          # A patch that silently fails to apply would waste four hours and
+          # then fail at exactly the same link step.
+          grep -qE '^template void MacroAssembler::FloatMinMaxHelper<double>' "$MA_FILE" \
+            || { echo "::error::FloatMinMaxHelper patch did not apply" >&2; exit 1; }
+          echo "Patch applied."
+        else
+          echo "FloatMinMaxHelper patch not needed for this source tree."
+        fi
+
         # ccache was already being installed but never wired up. Keep the cache
         # outside $GITHUB_WORKSPACE so it survives the workspace wipe and gives
         # the next monthly run a warm start.
