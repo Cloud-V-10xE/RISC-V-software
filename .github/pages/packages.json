@@ -120,6 +120,32 @@
       "icon_color_dark": "#B359CF"
     },
     {
+      "id": "calico-node",
+      "label": "calico-node",
+      "category": "Infrastructure",
+      "description": "Calico node daemon image — Felix dataplane agent and node lifecycle (VXLAN-only build, no BIRD/BGP)",
+      "central_release": false,
+      "workflow": "build-calico-node.yaml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/calico-node",
+      "docker_tag": "latest",
+      "icon_color": "#A0A630",
+      "icon_color_dark": "#C9CF59"
+    },
+    {
+      "id": "calico-cni",
+      "label": "calico-cni",
+      "category": "Infrastructure",
+      "description": "Calico CNI plugin installer image — used as the install-cni/upgrade-ipam init container",
+      "central_release": false,
+      "workflow": "build-calico-cni.yaml",
+      "install_type": "docker",
+      "docker_image": "cloudv10x/calico-cni",
+      "docker_tag": "latest",
+      "icon_color": "#3048A6",
+      "icon_color_dark": "#5971CF"
+    },
+    {
       "id": "loki",
       "label": "Loki",
       "category": "Infrastructure",

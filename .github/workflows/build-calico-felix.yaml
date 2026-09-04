@@ -1,0 +1,201 @@
+# Overlay for Calico's Felix agent. Common scaffolding lives in _build-package.yaml.
+#
+# Why this is a SEPARATE workflow from build-calico.yaml, not folded into it:
+#   Felix's production build is genuinely a different, heavier process than the
+#   four pure-Go binaries build-calico.yaml produces (calicoctl, cni-plugin,
+#   kube-controllers, typha) — those are `GOOS=linux GOARCH=riscv64
+#   CGO_ENABLED=0 go build`, no C toolchain involved. Felix links a real,
+#   natively-compiled libbpf via cgo, which means a C compiler, a from-source
+#   libbpf build, and a CGO cross-linking step that can fail in ways a pure-Go
+#   build cannot. Keeping it separate means a Felix build going wrong never
+#   takes the other four binaries down with it, and vice versa.
+#
+# Why libbpf is required at all, and why that's still safe:
+#   Felix's own production Makefile target (bin/calico-felix-$(ARCH) in
+#   felix/Makefile) unconditionally depends on a compiled libbpf.a and builds
+#   with CGO_ENABLED=1 — Calico's own canonical build does this even for
+#   architectures that will only ever run the default iptables/ipvs dataplane.
+#   That's fine: eBPF is NOT the default dataplane (FelixConfiguration
+#   bpfEnabled defaults to false, per docs.tigera.io/calico/latest/reference/
+#   resources/felixconfig) and the standard iptables/ipvs path needs no BPF
+#   capability at all, at build or run time. This build produces a Felix that
+#   is BPF-*capable* (matching upstream's own build), not one that mandates it.
+#
+# What this deliberately does NOT do:
+#   It does not compile Calico's eBPF C programs (felix/bpf-gpl/*.c -> .o,
+#   Makefile target `build-bpf`). That target is additive, not a dependency of
+#   bin/calico-felix-$(ARCH) — the userspace agent binary and the in-kernel BPF
+#   programs are built by entirely separate Makefile targets. Those .o files
+#   are only needed if the eBPF dataplane is actually enabled at runtime, which
+#   is not the default and is not what this build ships. This also means
+#   `bpftool` is not needed here — and that matters concretely, because Ubuntu
+#   24.04's riscv64 archive does not ship a bpftool package at all (confirmed:
+#   absent from every component, main/universe/restricted/multiverse — a real,
+#   separately-known Ubuntu riscv64 gap, not something specific to this repo).
+#
+# Kernel-side eBPF support on the target riscv64 hardware (Milk-V Pioneer) was
+# NOT verified as part of building this — see docs/packages/calico.md. That is
+# a runtime question for wherever this gets deployed, and is irrelevant to
+# whether the binary here builds and runs correctly in the default dataplane.
+name: Build Calico Felix for RISC-V
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 02 25 * *"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      actions: write
+      id-token: write      # attest-build-provenance
+      attestations: write  # attest-build-provenance
+    uses: ./.github/workflows/_build-package.yaml
+    with:
+      package-name: Calico Felix RISC-V
+      # RISE CI enablement project — stays on RISE's Scaleway EM-RV1 fleet,
+      # matching build-calico.yaml (the Calico version this build tracks).
+      # runner: ubuntu-24.04-riscv
+      # build-essential/pkg-config/libelf-dev/zlib1g-dev: libbpf's own build
+      # (verified against v1.6.2's src/Makefile, which pulls libelf+zlib via
+      # pkg-config). libpcap-dev: NOT visible from felix/Makefile at all — this
+      # only surfaced by actually running `go build`, which pulled in
+      # github.com/gopacket/gopacket/pcap as a transitive Felix dependency and
+      # failed on a missing pcap.h. apt resolves libpcap-dev's own further
+      # runtime deps (libdbus-1-3, libibverbs1 — confirmed present for riscv64)
+      # automatically; nothing further to add by hand for those.
+      # Deliberately NOT clang/llvm/bpftool: those compile the eBPF *programs*,
+      # which this build does not do (see the file header above).
+      apt-packages: >-
+        build-essential pkg-config libelf-dev zlib1g-dev libpcap-dev git xz-utils jq
+      go-version: latest
+      timeout-minutes: 120
+      build-script: |
+        set -eux
+
+        # Felix must match the Calico version build-calico.yaml already
+        # published — never independently resolve "latest Calico" here. Two
+        # workflows each chasing "latest" on their own schedule can drift by a
+        # release if one runs and a new Calico version ships before the other
+        # runs; a version-mismatched Felix next to a different calicoctl/typha
+        # is a real compatibility risk in a production control plane. Reading
+        # our own published asset name guarantees exact agreement.
+        CALICO_VERSION=$(curl -fsSL --retry 5 --retry-delay 10 \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+          | jq -r '[.[].assets[].name
+                    | select(test("^calico-[0-9][^-]*-riscv64-linux\\.tar\\.gz$"))
+                    | capture("^calico-(?<v>[0-9][^-]*)-riscv64-linux\\.tar\\.gz$").v]
+                   | sort_by(split(".") | map(tonumber? // 0)) | last // empty')
+        [ -n "$CALICO_VERSION" ] || {
+          echo "::error::No published calico-*-riscv64-linux.tar.gz asset found." >&2
+          echo "Run build-calico.yaml first — Felix is built to match whatever" >&2
+          echo "Calico version is already published, not to some independently" >&2
+          echo "resolved 'latest'." >&2
+          exit 1
+        }
+        CALICO_TAG="v${CALICO_VERSION}"
+        echo "Building Felix to match the published Calico ${CALICO_TAG}"
+
+        . "$GITHUB_WORKSPACE/.github/scripts/skip-if-published.sh" \
+            "calico-felix-${CALICO_VERSION}-riscv64-linux.tar.gz"
+
+        # Same GitHub auto-generated source tarball as build-calico.yaml, for
+        # the same reason: avoids git's protocol-level failure modes on this
+        # large monorepo. codeload.github.com does not honour Range on these
+        # (confirmed), so `tar -tf` below is what catches a truncated transfer.
+        SRC="$GITHUB_WORKSPACE/calico"
+        TARBALL="$GITHUB_WORKSPACE/calico-${CALICO_TAG}.tar.gz"
+        rm -rf "$SRC" "$TARBALL"
+
+        curl -fL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 \
+             -o "$TARBALL" \
+             "https://github.com/projectcalico/calico/archive/refs/tags/${CALICO_TAG}.tar.gz"
+        tar -tf "$TARBALL" > /dev/null
+
+        mkdir -p "$SRC"
+        tar -xf "$TARBALL" -C "$SRC" --strip-components=1
+        rm -f "$TARBALL"
+        cd "$SRC"
+
+        # ── Fetch and build libbpf, exactly matching felix/bpf-gpl/Makefile's
+        # own `libbpf` target and felix/Makefile's own $(LIBBPF_A) recipe.
+        # LIBBPF_VERSION is Calico's own pin (metadata.mk at the repo root),
+        # read from the checked-out tree so this always matches the Calico
+        # version being built rather than a value hardcoded here going stale.
+        LIBBPF_VERSION=$(awk -F= '/^LIBBPF_VERSION=/{print $2; exit}' metadata.mk)
+        [ -n "$LIBBPF_VERSION" ] || { echo "::error::Could not read LIBBPF_VERSION from metadata.mk" >&2; exit 1; }
+        echo "Calico ${CALICO_TAG} pins libbpf ${LIBBPF_VERSION}"
+
+        cd felix/bpf-gpl
+        rm -rf libbpf .libbpf-*
+        git clone --depth 1 --branch "$LIBBPF_VERSION" https://github.com/libbpf/libbpf.git
+        touch ".libbpf-${LIBBPF_VERSION}"
+
+        ARCH=riscv64
+        mkdir -p "libbpf/src/${ARCH}"
+        # BUILD_STATIC_ONLY=1 / EXTRA_CFLAGS=-fPIC / OBJDIR match felix/Makefile's
+        # $(LIBBPF_A) recipe verbatim — -fPIC specifically because the combined
+        # calico-felix binary links Go packages that make the linker emit
+        # -Wl,-z,nocopyreloc, which rejects libbpf's non-PIC references to glibc
+        # symbols like stderr (the same reasoning upstream's own comment gives).
+        #
+        # -Wno-error added on top of upstream's own flags: verified against the
+        # real v1.6.2 source that libbpf.c/libbpf_internal.c/netlink.c trip
+        # `-Werror=discarded-qualifiers` on strstr/strchr's const-correctness
+        # (a long-standing, widely-known category of GCC-version sensitivity in
+        # C code, not specific to this fork). We do not own this vendored code
+        # and should not hold it to our own warnings-as-errors policy — newer
+        # compilers routinely surface new warning categories in old, working C.
+        make -j"$(nproc)" -C libbpf/src BUILD_STATIC_ONLY=1 "OBJDIR=${ARCH}" \
+          EXTRA_CFLAGS="-fPIC -Wno-error"
+
+        LIBBPF_A="$PWD/libbpf/src/${ARCH}/libbpf.a"
+        [ -f "$LIBBPF_A" ] || { echo "::error::libbpf.a was not produced at $LIBBPF_A" >&2; exit 1; }
+        cd "$SRC"
+
+        # ── Build the Felix binary itself.
+        # CGO_CFLAGS/CGO_LDFLAGS mirror felix/Makefile's own definitions
+        # (CGO_LDFLAGS="-L.../libbpf/src/$(ARCH) ... -lbpf -lelf -lz",
+        # CGO_CFLAGS="-I.../libbpf/src -I.../bpf-gpl"), just pointed at this
+        # checkout's real filesystem paths instead of their Docker build
+        # container's /go/src/... path, since we build natively here rather
+        # than inside Calico's own build image.
+        PREFIX="$GITHUB_WORKSPACE/installed_binaries"
+        mkdir -p "$PREFIX"
+
+        # -lpcap added on top of upstream's own -lbpf -lelf -lz: felix pulls in
+        # github.com/gopacket/gopacket/pcap as a transitive Go dependency
+        # somewhere in its import graph. felix/Makefile's own CGO_LDFLAGS
+        # definition does not list it — this only surfaced by actually running
+        # the build, which failed on a missing pcap.h until libpcap-dev (above)
+        # was added. Not visible from reading the Makefile alone.
+        export CGO_ENABLED=1
+        export CGO_LDFLAGS="-L${SRC}/felix/bpf-gpl/libbpf/src/${ARCH} -lbpf -lelf -lz -lpcap"
+        export CGO_CFLAGS="-I${SRC}/felix/bpf-gpl/libbpf/src -I${SRC}/felix/bpf-gpl"
+
+        go build -o "$PREFIX/calico-felix" ./felix/cmd/calico-felix
+
+        # A CGO_ENABLED=1 build fails loudly at the link step if -lbpf can't be
+        # found (missing library, not a silent fallback) — see
+        # felix/bpf/libbpf/libbpf.go (real cgo bindings) vs libbpf_stub.go
+        # (//go:build !cgo). A successful build here is therefore already proof
+        # this linked the real libbpf, not the stub — but confirm the binary
+        # is genuinely dynamically linked (a telltale of a real cgo build,
+        # unlike the plain static Go binaries build-calico.yaml produces) and
+        # is a riscv64 ELF.
+        file "$PREFIX/calico-felix"
+        file "$PREFIX/calico-felix" | grep -q "RISC-V" \
+          || { echo "::error::calico-felix is not a RISC-V binary" >&2; exit 1; }
+        file "$PREFIX/calico-felix" | grep -q "dynamically linked" \
+          || { echo "::error::calico-felix is not dynamically linked — CGO likely did not take effect (built against the !cgo stub, not real libbpf)" >&2; exit 1; }
+
+        "$PREFIX/calico-felix" --version || true
+
+        ASSET_NAME="calico-felix-${CALICO_VERSION}-riscv64-linux.tar.gz"
+        ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
+        tar -czf "$ASSET_PATH" -C "$PREFIX" .
+
+        echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+        echo "ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+      trigger-pages: true

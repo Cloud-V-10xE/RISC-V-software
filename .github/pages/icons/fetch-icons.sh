@@ -25,6 +25,8 @@ transformers huggingface
 onnxruntime onnx
 kubernetes kubernetes
 calico -
+calico-node -
+calico-cni -
 loki grafana
 kube-apiserver kubernetes
 kube-controller-manager kubernetes

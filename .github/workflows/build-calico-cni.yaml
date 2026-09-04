@@ -1,0 +1,364 @@
+# Builds and publishes the calico-cni Docker image — used as the
+# `install-cni` init container in the calico-node daemonset (copies the CNI
+# plugin binaries onto the host and writes the CNI config file), and also
+# usable for the `upgrade-ipam` init container (`calico-ipam -upgrade`).
+#
+# NOT the same image as build-calico-node.yaml, even though both build from
+# the exact same `cmd/calico` combined Go binary. Verified against the real
+# upstream manifest (manifests/calico.yaml): the install-cni/upgrade-ipam
+# init containers use `quay.io/calico/calico`, built from
+# docker/calico/Dockerfile — a minimal, unprivileged image with no runit, no
+# BIRD, no iptables/dataplane tooling at all, just the binary plus
+# calicoctl/calico-ipam symlinks. The calico-node main container is a
+# different, heavier image (build-calico-node.yaml). Do not collapse these
+# back into one image.
+#
+# Install-cni's own logic (cni-plugin/pkg/install/install.go, invoked here as
+# `calico component cni install`) looks for its source binary at
+# /usr/bin/calico first, then copies it to two destination filenames on the
+# host — "calico" and "calico-ipam" — under /host/opt/cni/bin. The
+# calicoctl/calico-ipam symlinks staged into THIS image exist for direct
+# `docker run ... calicoctl ...` / `calico-ipam` invocation of the image
+# itself (matching upstream's own docker/calico/Dockerfile); they are not
+# what install-cni copies onto the host — that step re-derives both
+# destination names from the single /usr/bin/calico binary via argv0
+# dispatch, so they never need to be kept in sync by hand here.
+#
+# Why a fresh, self-contained Calico source checkout here too (not shared
+# with build-calico.yaml/build-calico-felix.yaml/build-calico-node.yaml):
+# matches this repo's existing convention of fully independent build
+# workflows — no shared build artifacts, no coupling between failure
+# domains. The version is read back from build-calico.yaml's own published
+# asset (never independently resolved), so this image's Calico version can
+# never drift from calicoctl/typha/Felix/calico-node.
+name: Build Calico CNI Image for RISC-V and x86
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 02 27 * *"
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      calico_version: ${{ steps.version.outputs.calico_version }}
+    steps:
+      - name: Resolve the Calico version to build
+        id: version
+        run: |
+          set -eux
+          CALICO_VERSION=$(curl -fsSL --retry 5 --retry-delay 10 \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq -r '[.[].assets[].name
+                      | select(test("^calico-[0-9][^-]*-riscv64-linux\\.tar\\.gz$"))
+                      | capture("^calico-(?<v>[0-9][^-]*)-riscv64-linux\\.tar\\.gz$").v]
+                     | sort_by(split(".") | map(tonumber? // 0)) | last // empty')
+          [ -n "$CALICO_VERSION" ] || {
+            echo "::error::No published calico-*-riscv64-linux.tar.gz asset found." >&2
+            echo "Run build-calico.yaml first — this image is built to match" >&2
+            echo "whatever Calico version is already published, not some" >&2
+            echo "independently resolved 'latest'." >&2
+            exit 1
+          }
+          echo "Building calico-cni image to match published Calico ${CALICO_VERSION}"
+          echo "calico_version=$CALICO_VERSION" >> "$GITHUB_OUTPUT"
+
+  build-amd64:
+    needs: get-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    env:
+      CALICO_VERSION: ${{ needs.get-version.outputs.calico_version }}
+    steps:
+      - name: Checkout repo (for the local build-environment action)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: Calico CNI image (x86_64)
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libelf-dev zlib1g-dev libpcap-dev \
+            git xz-utils jq
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Fetch Calico source
+        run: |
+          set -eux
+          SRC="$GITHUB_WORKSPACE/calico"
+          TARBALL="$GITHUB_WORKSPACE/calico-v${CALICO_VERSION}.tar.gz"
+          rm -rf "$SRC" "$TARBALL"
+          curl -fL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 \
+               -o "$TARBALL" \
+               "https://github.com/projectcalico/calico/archive/refs/tags/v${CALICO_VERSION}.tar.gz"
+          tar -tf "$TARBALL" > /dev/null
+          mkdir -p "$SRC"
+          tar -xf "$TARBALL" -C "$SRC" --strip-components=1
+          rm -f "$TARBALL"
+
+      - name: Build libbpf (amd64)
+        run: |
+          set -eux
+          SRC="$GITHUB_WORKSPACE/calico"
+          cd "$SRC"
+          LIBBPF_VERSION=$(awk -F= '/^LIBBPF_VERSION=/{print $2; exit}' metadata.mk)
+          [ -n "$LIBBPF_VERSION" ] || { echo "::error::Could not read LIBBPF_VERSION from metadata.mk" >&2; exit 1; }
+          cd felix/bpf-gpl
+          rm -rf libbpf
+          git clone --depth 1 --branch "$LIBBPF_VERSION" https://github.com/libbpf/libbpf.git
+          mkdir -p libbpf/src/amd64
+          make -j"$(nproc)" -C libbpf/src BUILD_STATIC_ONLY=1 OBJDIR=amd64 \
+            EXTRA_CFLAGS="-fPIC -Wno-error"
+
+      - name: Build the combined calico binary
+        run: |
+          set -eux
+          SRC="$GITHUB_WORKSPACE/calico"
+          cd "$SRC"
+          LIBBPF_A="$SRC/felix/bpf-gpl/libbpf/src/amd64/libbpf.a"
+          [ -f "$LIBBPF_A" ] || { echo "::error::libbpf.a was not produced" >&2; exit 1; }
+
+          PREFIX="$GITHUB_WORKSPACE/installed_binaries"
+          mkdir -p "$PREFIX"
+
+          export CGO_ENABLED=1
+          export CGO_LDFLAGS="-L${SRC}/felix/bpf-gpl/libbpf/src/amd64 -lbpf -lelf -lz -lpcap"
+          export CGO_CFLAGS="-I${SRC}/felix/bpf-gpl/libbpf/src -I${SRC}/felix/bpf-gpl"
+
+          go build -o "$PREFIX/calico" ./cmd/calico
+
+          file "$PREFIX/calico"
+          file "$PREFIX/calico" | grep -q "x86-64" \
+            || { echo "::error::calico binary is not x86_64" >&2; exit 1; }
+          file "$PREFIX/calico" | grep -q "dynamically linked" \
+            || { echo "::error::calico binary is not dynamically linked — CGO likely did not take effect" >&2; exit 1; }
+
+      - name: Build and push calico-cni (amd64)
+        run: |
+          set -eux
+          STAGE="$GITHUB_WORKSPACE/cni-image-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp "$GITHUB_WORKSPACE/installed_binaries/calico" "$STAGE/calico"
+
+          cat > "$STAGE/Dockerfile" << 'EOF'
+          ARG BASE_IMAGE=debian:trixie-slim
+          FROM ${BASE_IMAGE}
+
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+                ca-certificates \
+              && rm -rf /var/lib/apt/lists/*
+
+          COPY calico /usr/bin/calico
+          RUN chmod +x /usr/bin/calico \
+              && ln -s calico /usr/bin/calicoctl \
+              && ln -s calico /usr/bin/calico-ipam
+
+          USER 10001:10001
+
+          LABEL org.opencontainers.image.description="calico-cni: install-cni/calico-ipam init container image — built by Cloud-V-10xE/RISC-V-software"
+          LABEL org.opencontainers.image.source="https://github.com/projectcalico/calico"
+
+          ENTRYPOINT ["/usr/bin/calico"]
+          EOF
+
+          cd "$STAGE"
+          docker build \
+            --build-arg BASE_IMAGE=debian:trixie-slim \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${CALICO_VERSION}-amd64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:latest-amd64" \
+            .
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${CALICO_VERSION}-amd64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:latest-amd64"
+
+  build-riscv64:
+    needs: get-version
+    # Self-hosted Milk-V Pioneer fleet, not RISE's ubuntu-24.04-riscv runners
+    # — same reasoning as build-calico-node.yaml: needs the local Docker
+    # daemon, and this is a large monorepo compile.
+    runs-on: RISCV64
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      CALICO_VERSION: ${{ needs.get-version.outputs.calico_version }}
+    steps:
+      - name: Verify Docker is available on this runner
+        run: |
+          docker version || {
+            echo "::error::Docker is not available on this runner. This job needs the docker-capable RISCV64 runner variant (see runner-image/docker-in-docker/)." >&2
+            exit 1
+          }
+
+      - name: Checkout repo (for the local build-environment action)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Record build environment
+        uses: ./.github/actions/build-environment
+        with:
+          package-name: Calico CNI image (riscv64)
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libelf-dev zlib1g-dev libpcap-dev \
+            git xz-utils jq
+
+      - name: Setup Go
+        run: |
+          set -eu
+          GO_VER=$(curl -fsSL --retry 3 'https://go.dev/dl/?mode=json' 2>/dev/null \
+            | grep -o '"version"[[:space:]]*:[[:space:]]*"go[0-9.]*"' | head -n1 \
+            | grep -o 'go[0-9.]*' || true)
+          [ -n "$GO_VER" ] || GO_VER="go1.24.6"
+          curl -fsSL --retry 3 --retry-delay 10 -o /tmp/go.tar.gz \
+            "https://go.dev/dl/${GO_VER}.linux-riscv64.tar.gz"
+          sudo apt-get remove -y golang golang-go 2>/dev/null || true
+          sudo rm -rf /usr/local/go
+          sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+          /usr/local/go/bin/go version
+
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
+            -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Fetch Calico source
+        run: |
+          set -eux
+          SRC="$GITHUB_WORKSPACE/calico"
+          TARBALL="$GITHUB_WORKSPACE/calico-v${CALICO_VERSION}.tar.gz"
+          rm -rf "$SRC" "$TARBALL"
+          curl -fL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 \
+               -o "$TARBALL" \
+               "https://github.com/projectcalico/calico/archive/refs/tags/v${CALICO_VERSION}.tar.gz"
+          tar -tf "$TARBALL" > /dev/null
+          mkdir -p "$SRC"
+          tar -xf "$TARBALL" -C "$SRC" --strip-components=1
+          rm -f "$TARBALL"
+
+      - name: Build libbpf (riscv64)
+        run: |
+          set -eux
+          SRC="$GITHUB_WORKSPACE/calico"
+          cd "$SRC"
+          LIBBPF_VERSION=$(awk -F= '/^LIBBPF_VERSION=/{print $2; exit}' metadata.mk)
+          [ -n "$LIBBPF_VERSION" ] || { echo "::error::Could not read LIBBPF_VERSION from metadata.mk" >&2; exit 1; }
+          cd felix/bpf-gpl
+          rm -rf libbpf
+          git clone --depth 1 --branch "$LIBBPF_VERSION" https://github.com/libbpf/libbpf.git
+          mkdir -p libbpf/src/riscv64
+          make -j"$(nproc)" -C libbpf/src BUILD_STATIC_ONLY=1 OBJDIR=riscv64 \
+            EXTRA_CFLAGS="-fPIC -Wno-error"
+
+      - name: Build the combined calico binary
+        run: |
+          set -eux
+          SRC="$GITHUB_WORKSPACE/calico"
+          cd "$SRC"
+          LIBBPF_A="$SRC/felix/bpf-gpl/libbpf/src/riscv64/libbpf.a"
+          [ -f "$LIBBPF_A" ] || { echo "::error::libbpf.a was not produced" >&2; exit 1; }
+
+          PREFIX="$GITHUB_WORKSPACE/installed_binaries"
+          mkdir -p "$PREFIX"
+
+          export CGO_ENABLED=1
+          export CGO_LDFLAGS="-L${SRC}/felix/bpf-gpl/libbpf/src/riscv64 -lbpf -lelf -lz -lpcap"
+          export CGO_CFLAGS="-I${SRC}/felix/bpf-gpl/libbpf/src -I${SRC}/felix/bpf-gpl"
+
+          go build -o "$PREFIX/calico" ./cmd/calico
+
+          file "$PREFIX/calico"
+          file "$PREFIX/calico" | grep -q "RISC-V" \
+            || { echo "::error::calico binary is not a RISC-V binary" >&2; exit 1; }
+          file "$PREFIX/calico" | grep -q "dynamically linked" \
+            || { echo "::error::calico binary is not dynamically linked — CGO likely did not take effect" >&2; exit 1; }
+
+      - name: Build and push calico-cni (riscv64)
+        run: |
+          set -eux
+          STAGE="$GITHUB_WORKSPACE/cni-image-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp "$GITHUB_WORKSPACE/installed_binaries/calico" "$STAGE/calico"
+
+          cat > "$STAGE/Dockerfile" << 'EOF'
+          ARG BASE_IMAGE=riscv64/debian:trixie-slim
+          FROM ${BASE_IMAGE}
+
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+                ca-certificates \
+              && rm -rf /var/lib/apt/lists/*
+
+          COPY calico /usr/bin/calico
+          RUN chmod +x /usr/bin/calico \
+              && ln -s calico /usr/bin/calicoctl \
+              && ln -s calico /usr/bin/calico-ipam
+
+          USER 10001:10001
+
+          LABEL org.opencontainers.image.description="calico-cni: install-cni/calico-ipam init container image — built by Cloud-V-10xE/RISC-V-software"
+          LABEL org.opencontainers.image.source="https://github.com/projectcalico/calico"
+
+          ENTRYPOINT ["/usr/bin/calico"]
+          EOF
+
+          cd "$STAGE"
+          docker build \
+            --build-arg BASE_IMAGE=riscv64/debian:trixie-slim \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${CALICO_VERSION}-riscv64" \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:latest-riscv64" \
+            .
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${CALICO_VERSION}-riscv64"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:latest-riscv64"
+
+  create-manifests:
+    needs: [get-version, build-amd64, build-riscv64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CALICO_VERSION: ${{ needs.get-version.outputs.calico_version }}
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifests
+        run: |
+          set -eux
+          for TAG in "${CALICO_VERSION}" "latest"; do
+            docker manifest rm "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${TAG}" 2>/dev/null || true
+            docker manifest create \
+              "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${TAG}" \
+              "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${TAG}-amd64" \
+              "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${TAG}-riscv64"
+            docker manifest push "${{ secrets.DOCKERHUB_USERNAME }}/calico-cni:${TAG}"
+          done

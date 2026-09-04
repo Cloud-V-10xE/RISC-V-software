@@ -19,33 +19,62 @@ jobs:
     uses: ./.github/workflows/_build-package.yaml
     with:
       package-name: Calico RISC-V
-      # RISE CI enablement project — stays on RISE's Scaleway EM-RV1 fleet
-      # rather than the default self-hosted RISCV64 runners.
-      runner: ubuntu-24.04-riscv
+      # # RISE CI enablement project — stays on RISE's Scaleway EM-RV1 fleet
+      # # rather than the default self-hosted RISCV64 runners.
+      # runner: ubuntu-24.04-riscv
       apt-packages: >-
         build-essential clang llvm libbpf-dev libnftnl-dev
         iptables libxtables-dev libiptc-dev pkg-config
-        libpcap-dev libelf-dev linux-libc-dev
+        libpcap-dev libelf-dev linux-libc-dev xz-utils jq
       go-version: latest
       timeout-minutes: 180
       build-script: |
         set -eux
-        git config --global http.postBuffer 524288000
-        git config --global http.maxRequests 2
-        git config --global core.compression 0
 
-        CALICO_REPO="https://github.com/projectcalico/calico"
-        if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-          CALICO_REF="$GITHUB_REF_NAME"
-        else
-          CALICO_REF="master"
-        fi
+        # Latest STABLE release, not master. This used to track master
+        # unconditionally, which is a real risk for a component headed into a
+        # production Kubernetes control plane — master sits mid-development
+        # between releases. GitHub's "latest release" endpoint already excludes
+        # prereleases/drafts, so this is one call, no filtering needed.
+        #
+        # This tag is also the one build-calico-felix.yaml reads back (from
+        # THIS repo's own published asset name, not by independently re-resolving
+        # "latest" itself) so that Felix always matches the exact Calico version
+        # shipped here — the two must never drift, since a version-mismatched
+        # Felix running against a different calicoctl/typha is a real
+        # compatibility risk. If you change how this resolves, keep that in mind.
+        CALICO_TAG=$(curl -fsSL --retry 5 --retry-delay 10 \
+          "https://api.github.com/repos/projectcalico/calico/releases/latest" \
+          | jq -r '.tag_name')
+        [ -n "$CALICO_TAG" ] && [ "$CALICO_TAG" != "null" ] \
+          || { echo "Could not resolve the latest stable Calico release" >&2; exit 1; }
+        CALICO_VERSION="${CALICO_TAG#v}"
+        echo "Latest stable Calico release: ${CALICO_TAG}"
 
-        rm -rf "$GITHUB_WORKSPACE/calico"
-        git clone --depth=1 --branch "$CALICO_REF" "$CALICO_REPO" "$GITHUB_WORKSPACE/calico"
-        cd "$GITHUB_WORKSPACE/calico"
+        . "$GITHUB_WORKSPACE/.github/scripts/skip-if-published.sh" \
+            "calico-${CALICO_VERSION}-riscv64-linux.tar.gz"
 
-        CALICO_VERSION="$(git describe --tags --always)"
+        # GitHub's auto-generated source tarball rather than a git clone: Calico
+        # is a large monorepo and cloning it was a real source of flaky
+        # "RPC failed; HTTP 429" / mid-transfer failures elsewhere in this
+        # archive. codeload.github.com does not honour Range on these archives
+        # (confirmed — a ranged request still returns the full body), so this
+        # does not get true resume, but it avoids git's protocol-level failure
+        # modes entirely, and `tar -tf` below still catches a truncated file.
+        SRC="$GITHUB_WORKSPACE/calico"
+        TARBALL="$GITHUB_WORKSPACE/calico-${CALICO_TAG}.tar.gz"
+        rm -rf "$SRC" "$TARBALL"
+
+        curl -fL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 \
+             -o "$TARBALL" \
+             "https://github.com/projectcalico/calico/archive/refs/tags/${CALICO_TAG}.tar.gz"
+        tar -tf "$TARBALL" > /dev/null
+
+        mkdir -p "$SRC"
+        tar -xf "$TARBALL" -C "$SRC" --strip-components=1
+        rm -f "$TARBALL"
+        cd "$SRC"
+
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
 
         build_binary() {
@@ -59,10 +88,18 @@ jobs:
         }
 
         # Pure-Go components — build the actual main packages explicitly when present.
-        # CGO must stay disabled: cmd/calico transitively imports felix/bpf/libbpf, a
-        # cgo binding to a vendored libbpf submodule that isn't fetched by our shallow,
-        # non-submodule clone and that upstream only links for amd64/arm64/ppc64le/s390x
-        # (no riscv64 support) — CGO_ENABLED=0 keeps that path out of the build.
+        # CGO_ENABLED=0 is a deliberate choice for these four, not a workaround for
+        # a blocker: felix/bpf/libbpf (which cmd/calico transitively imports) ships
+        # a `//go:build !cgo` stub specifically so a cgo-disabled build still
+        # compiles and runs — see felix/bpf/libbpf/libbpf_stub.go upstream. None of
+        # these four binaries need real BPF capability, so the simpler, faster,
+        # pure-Go build is the right one for them.
+        #
+        # (An earlier version of this comment claimed felix/bpf/libbpf was a git
+        # submodule missed by a shallow clone. That was wrong — it isn't a
+        # submodule at all; libbpf is fetched by a Makefile-driven `git clone` of
+        # github.com/libbpf/libbpf at a pinned tag. See build-calico-felix.yaml,
+        # which does that fetch for real to build Felix itself.)
         build_binary calicoctl ./cmd/calico
         build_binary cni-plugin ./cni-plugin/cmd/calico
         build_binary kube-controllers ./kube-controllers/cmd/kube-controllers
@@ -73,14 +110,18 @@ jobs:
         # cmd/calico (see cmd/calico/apiserver.go), so it's already part of the
         # calicoctl binary above.
 
-        # Felix is currently skipped because its BPF build path requires extra
-        # native libbpf support that is not available in this runner environment.
-        echo "Skipping Felix build because the libbpf-based BPF path is not available in this environment" >&2
+        # Felix is built separately by build-calico-felix.yaml, not here. Its
+        # production build links a real, natively-compiled libbpf via CGO — a
+        # heavier, slower, more failure-prone process (a C toolchain, not just
+        # `go build`) than the four pure-Go binaries above, and it deliberately
+        # has its own failure domain: a Felix build going wrong should not take
+        # calicoctl/cni-plugin/kube-controllers/typha down with it, or vice versa.
+        # That workflow reads the version published here (not upstream "latest")
+        # so the two always ship in lockstep.
 
         "$GITHUB_WORKSPACE/installed_binaries/calicoctl" version || true
 
-        BINUTILS_STYLE_VERSION="${CALICO_VERSION#v}"
-        ASSET_NAME="calico-${BINUTILS_STYLE_VERSION}-riscv64-linux.tar.gz"
+        ASSET_NAME="calico-${CALICO_VERSION}-riscv64-linux.tar.gz"
         ASSET_PATH="$GITHUB_WORKSPACE/${ASSET_NAME}"
         tar -czf "$ASSET_PATH" -C "$GITHUB_WORKSPACE/installed_binaries" .
 
