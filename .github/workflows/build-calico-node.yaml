@@ -1,16 +1,30 @@
 # Builds and publishes the calico-node Docker image (the main calico-node
-# daemonset container — programs Felix, and node lifecycle/startup).
+# daemonset container — runs Felix, confd (unused here — see below), and
+# node lifecycle/startup as a single combined binary under runit).
+#
+# Build path verified against the real tagged release tree, not master:
+# master has restructured towards a single top-level `cmd/calico` binary
+# used for everything, but that layout does not exist in any tagged release
+# yet. At a real release (verified at v3.32.2, and this workflow always
+# builds whatever version build-calico.yaml published, never master), the
+# combined node binary lives at node/cmd/calico-node and is invoked with
+# flags (`calico-node -felix`, `-confd`, `-startup`, `-node-services`, ...),
+# not `master`'s Cobra subcommands (`calico component felix`). An earlier
+# version of this workflow targeted ./cmd/calico, which does not exist at
+# any released tag — confirmed empirically with a real `go build` against
+# v3.32.2 before and after this fix, not assumed from reading the Makefile.
 #
 # This is deliberately NOT the same image as build-calico-cni.yaml, even
-# though both are built from the exact same `cmd/calico` combined Go binary.
-# Verified against the real upstream manifest (manifests/calico.yaml): the
+# though both ultimately come from the same Calico source tree. Verified
+# against the real upstream manifest (manifests/calico.yaml) at v3.32.2: the
 # calico-node daemonset's main container uses `quay.io/calico/node`, built
 # from node/Dockerfile — a runit-supervised image carrying Felix, iptables/
-# nftables/conntrack tooling, and (upstream) BIRD/confd. The install-cni
-# init container uses a DIFFERENT, much smaller image, `quay.io/calico/calico`
-# (build-calico-cni.yaml here), built from docker/calico/Dockerfile — no
-# runit, no dataplane tooling, just the binary. Do not collapse these back
-# into one image; the runtime requirements are genuinely different.
+# nftables/conntrack tooling, and (upstream) BIRD/confd. The install-cni and
+# upgrade-ipam init containers use a DIFFERENT, much smaller image,
+# `quay.io/calico/cni` (build-calico-cni.yaml here), built from
+# cni-plugin/Dockerfile — no runit, no dataplane tooling, no CGO/libbpf at
+# all, just two small pure-Go binaries. Do not collapse these back into one
+# image; the runtime requirements are genuinely different.
 #
 # Scope decision — VXLAN only, no BIRD/BGP:
 #   This image deliberately ships without BIRD, bird6, birdcl, birdcl6, or
@@ -156,13 +170,13 @@ jobs:
           export CGO_LDFLAGS="-L${SRC}/felix/bpf-gpl/libbpf/src/amd64 -lbpf -lelf -lz -lpcap"
           export CGO_CFLAGS="-I${SRC}/felix/bpf-gpl/libbpf/src -I${SRC}/felix/bpf-gpl"
 
-          go build -o "$PREFIX/calico" ./cmd/calico
+          go build -o "$PREFIX/calico-node" ./node/cmd/calico-node
 
-          file "$PREFIX/calico"
-          file "$PREFIX/calico" | grep -q "x86-64" \
-            || { echo "::error::calico binary is not x86_64" >&2; exit 1; }
-          file "$PREFIX/calico" | grep -q "dynamically linked" \
-            || { echo "::error::calico binary is not dynamically linked — CGO likely did not take effect" >&2; exit 1; }
+          file "$PREFIX/calico-node"
+          file "$PREFIX/calico-node" | grep -q "x86-64" \
+            || { echo "::error::calico-node binary is not x86_64" >&2; exit 1; }
+          file "$PREFIX/calico-node" | grep -q "dynamically linked" \
+            || { echo "::error::calico-node binary is not dynamically linked — CGO likely did not take effect" >&2; exit 1; }
 
       - name: Stage image build context
         run: |
@@ -173,7 +187,7 @@ jobs:
           mkdir -p "$STAGE/filesystem/etc/calico" \
                    "$STAGE/filesystem/etc/service/available/felix/log" \
                    "$STAGE/filesystem/etc/service/available/node-services/log" \
-                   "$STAGE/filesystem/sbin"
+                   "$STAGE/filesystem/usr/sbin"
 
           # Config/supervision files come straight from Calico's own source
           # tree — pure shell/config, arch-independent, unmodified. Only the
@@ -189,9 +203,9 @@ jobs:
              "$STAGE/filesystem/etc/service/available/node-services/run"
           cp "$SRC/node/filesystem/etc/service/available/node-services/log/run" \
              "$STAGE/filesystem/etc/service/available/node-services/log/run"
-          cp "$SRC/node/filesystem/sbin/start_runit" "$STAGE/filesystem/sbin/start_runit"
+          cp "$SRC/node/filesystem/sbin/start_runit" "$STAGE/filesystem/usr/sbin/start_runit"
 
-          cp "$GITHUB_WORKSPACE/installed_binaries/calico" "$STAGE/calico"
+          cp "$GITHUB_WORKSPACE/installed_binaries/calico-node" "$STAGE/calico-node"
 
           cat > "$STAGE/Dockerfile" << 'EOF'
           ARG BASE_IMAGE=debian:trixie-slim
@@ -211,10 +225,21 @@ jobs:
                 kmod iputils-ping procps findutils debianutils ca-certificates \
               && rm -rf /var/lib/apt/lists/*
 
-          COPY filesystem/ /
-          COPY calico /usr/bin/calico
+          # Debian's runit package creates /etc/service as its own symlink
+          # (-> /etc/runit/runsvdir/current) for its sysvinit/systemd service
+          # integration. Calico's filesystem tree expects /etc/service to be
+          # a plain directory it populates with available/ and enabled/
+          # subdirectories, driven entirely by its own start_runit/rc.local
+          # (runsvdir -P /etc/service/enabled) — none of Debian's own runit
+          # service-management convention is used here. Confirmed via a real
+          # local docker build: without this, COPY fails outright with
+          # "cannot copy to non-directory: .../etc/service".
+          RUN rm -f /etc/service
 
-          RUN chmod +x /usr/bin/calico /sbin/start_runit /etc/rc.local \
+          COPY filesystem/ /
+          COPY calico-node /usr/bin/calico-node
+
+          RUN chmod +x /usr/bin/calico-node /sbin/start_runit /etc/rc.local \
                 /etc/service/available/felix/run \
                 /etc/service/available/felix/log/run \
                 /etc/service/available/node-services/run \
@@ -352,13 +377,13 @@ jobs:
           export CGO_LDFLAGS="-L${SRC}/felix/bpf-gpl/libbpf/src/riscv64 -lbpf -lelf -lz -lpcap"
           export CGO_CFLAGS="-I${SRC}/felix/bpf-gpl/libbpf/src -I${SRC}/felix/bpf-gpl"
 
-          go build -o "$PREFIX/calico" ./cmd/calico
+          go build -o "$PREFIX/calico-node" ./node/cmd/calico-node
 
-          file "$PREFIX/calico"
-          file "$PREFIX/calico" | grep -q "RISC-V" \
-            || { echo "::error::calico binary is not a RISC-V binary" >&2; exit 1; }
-          file "$PREFIX/calico" | grep -q "dynamically linked" \
-            || { echo "::error::calico binary is not dynamically linked — CGO likely did not take effect" >&2; exit 1; }
+          file "$PREFIX/calico-node"
+          file "$PREFIX/calico-node" | grep -q "RISC-V" \
+            || { echo "::error::calico-node binary is not a RISC-V binary" >&2; exit 1; }
+          file "$PREFIX/calico-node" | grep -q "dynamically linked" \
+            || { echo "::error::calico-node binary is not dynamically linked — CGO likely did not take effect" >&2; exit 1; }
 
       - name: Stage image build context
         run: |
@@ -369,7 +394,7 @@ jobs:
           mkdir -p "$STAGE/filesystem/etc/calico" \
                    "$STAGE/filesystem/etc/service/available/felix/log" \
                    "$STAGE/filesystem/etc/service/available/node-services/log" \
-                   "$STAGE/filesystem/sbin"
+                   "$STAGE/filesystem/usr/sbin"
 
           cp "$SRC/node/filesystem/etc/rc.local" "$STAGE/filesystem/etc/rc.local"
           cp "$SRC/node/filesystem/etc/calico/felix.cfg" "$STAGE/filesystem/etc/calico/felix.cfg"
@@ -381,9 +406,9 @@ jobs:
              "$STAGE/filesystem/etc/service/available/node-services/run"
           cp "$SRC/node/filesystem/etc/service/available/node-services/log/run" \
              "$STAGE/filesystem/etc/service/available/node-services/log/run"
-          cp "$SRC/node/filesystem/sbin/start_runit" "$STAGE/filesystem/sbin/start_runit"
+          cp "$SRC/node/filesystem/sbin/start_runit" "$STAGE/filesystem/usr/sbin/start_runit"
 
-          cp "$GITHUB_WORKSPACE/installed_binaries/calico" "$STAGE/calico"
+          cp "$GITHUB_WORKSPACE/installed_binaries/calico-node" "$STAGE/calico-node"
 
           cat > "$STAGE/Dockerfile" << 'EOF'
           ARG BASE_IMAGE=riscv64/debian:trixie-slim
@@ -394,10 +419,21 @@ jobs:
                 kmod iputils-ping procps findutils debianutils ca-certificates \
               && rm -rf /var/lib/apt/lists/*
 
-          COPY filesystem/ /
-          COPY calico /usr/bin/calico
+          # Debian's runit package creates /etc/service as its own symlink
+          # (-> /etc/runit/runsvdir/current) for its sysvinit/systemd service
+          # integration. Calico's filesystem tree expects /etc/service to be
+          # a plain directory it populates with available/ and enabled/
+          # subdirectories, driven entirely by its own start_runit/rc.local
+          # (runsvdir -P /etc/service/enabled) — none of Debian's own runit
+          # service-management convention is used here. Confirmed via a real
+          # local docker build: without this, COPY fails outright with
+          # "cannot copy to non-directory: .../etc/service".
+          RUN rm -f /etc/service
 
-          RUN chmod +x /usr/bin/calico /sbin/start_runit /etc/rc.local \
+          COPY filesystem/ /
+          COPY calico-node /usr/bin/calico-node
+
+          RUN chmod +x /usr/bin/calico-node /sbin/start_runit /etc/rc.local \
                 /etc/service/available/felix/run \
                 /etc/service/available/felix/log/run \
                 /etc/service/available/node-services/run \

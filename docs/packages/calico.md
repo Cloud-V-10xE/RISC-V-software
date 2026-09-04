@@ -103,23 +103,29 @@ to be true, and is what this package runs unless you deliberately change it.
 ## Container images: `calico-node` / `calico-cni`
 
 `build-calico-node.yaml` and `build-calico-cni.yaml` publish two multi-arch
-(`amd64` + `riscv64`) Docker Hub images, built from the same `cmd/calico`
-combined binary (CGO + the same libbpf link as the Felix package above) but
-packaged very differently — matching how upstream itself splits these two
-images, confirmed against the real deployed manifest
-(`manifests/calico.yaml`), not assumed from the Dockerfiles alone:
+(`amd64` + `riscv64`) Docker Hub images, built from genuinely different
+binaries in the same Calico source tree — not one shared binary packaged
+two ways. That distinction, and the exact build paths below, were verified
+against the *real tagged release tree* (checked at v3.32.2) and a real
+`go build` for each, not against Calico's `master` branch: `master` has
+been restructuring towards a single top-level `cmd/calico` combined binary
+that both images could share, but that path does not exist in any tagged
+release yet, and this repo always builds whatever version `build-calico.yaml`
+already published — never `master`.
 
-| Image | Docker Hub | Matches upstream | Used as |
-|---|---|---|---|
-| `calico-node` | `cloudv10x/calico-node` | `quay.io/calico/node` (`node/Dockerfile`) | the main `calico-node` container |
-| `calico-cni` | `cloudv10x/calico-cni` | `quay.io/calico/calico` (`docker/calico/Dockerfile`) | the `install-cni` and `upgrade-ipam` init containers |
+| Image | Docker Hub | Matches upstream | Built from | Used as |
+|---|---|---|---|---|
+| `calico-node` | `cloudv10x/calico-node` | `quay.io/calico/node` (`node/Dockerfile`) | `node/cmd/calico-node` — CGO + libbpf, same link as the Felix package above | the main `calico-node` container |
+| `calico-cni` | `cloudv10x/calico-cni` | `quay.io/calico/cni` (`cni-plugin/Dockerfile`) | `cni-plugin/cmd/calico` + `cni-plugin/cmd/install` — plain Go, `CGO_ENABLED=0`, no libbpf at all | the `install-cni` and `upgrade-ipam` init containers |
 
-These are genuinely different images, not one image under two names:
-`calico-node` is runit-supervised and carries the iptables/nftables/conntrack
-dataplane tooling; `calico-cni` is just the binary plus `calicoctl`/
-`calico-ipam` symlinks, running unprivileged. Point a daemonset spec's
-`calico-node` container at the first and its `install-cni`/`upgrade-ipam`
-init containers at the second — they are not interchangeable.
+These are genuinely different images: `calico-node` is runit-supervised and
+carries the iptables/nftables/conntrack dataplane tooling on top of a
+CGO+libbpf binary; `calico-cni` is two small pure-Go binaries (`calico-ipam`
+is a copy of `calico`, dispatching on `argv[0]` — matching upstream's own
+`ln -sf ./calico calico-ipam` build step) with no dataplane tooling and no
+BPF capability, running unprivileged. Point a daemonset spec's `calico-node`
+container at the first and its `install-cni`/`upgrade-ipam` init containers
+at the second — they are not interchangeable.
 
 Both are tagged `<calico-version>` and `latest`, each further suffixed
 `-amd64`/`-riscv64` before being merged into a multi-arch manifest under the

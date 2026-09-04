@@ -77,33 +77,47 @@ jobs:
 
         mkdir -p "$GITHUB_WORKSPACE/installed_binaries"
 
+        # Fails loudly on a missing path rather than skipping it: a silent skip
+        # here is exactly how calicoctl and typha ended up quietly absent from
+        # every published tarball for months after upstream moved their build
+        # paths — the workflow kept reporting success the whole time. A wrong
+        # path should break the build, not ship an incomplete package.
         build_binary() {
           local output_name="$1"
           local target="$2"
-          if [ -d "$target" ] || [ -f "$target" ]; then
-            GOOS=linux GOARCH=riscv64 CGO_ENABLED=0 go build -o "$GITHUB_WORKSPACE/installed_binaries/$output_name" "$target"
-          else
-            echo "Skipping $output_name: source path '$target' not found" >&2
+          if [ ! -d "$target" ] && [ ! -f "$target" ]; then
+            echo "::error::Source path '$target' for $output_name not found — upstream may have moved it again. Check the real tagged release tree, not master." >&2
+            exit 1
           fi
+          GOOS=linux GOARCH=riscv64 CGO_ENABLED=0 go build -o "$GITHUB_WORKSPACE/installed_binaries/$output_name" "$target"
         }
 
         # Pure-Go components — build the actual main packages explicitly when present.
         # CGO_ENABLED=0 is a deliberate choice for these four, not a workaround for
-        # a blocker: felix/bpf/libbpf (which cmd/calico transitively imports) ships
-        # a `//go:build !cgo` stub specifically so a cgo-disabled build still
-        # compiles and runs — see felix/bpf/libbpf/libbpf_stub.go upstream. None of
-        # these four binaries need real BPF capability, so the simpler, faster,
-        # pure-Go build is the right one for them.
+        # a blocker: felix/bpf/libbpf (which the node/CLI packages transitively
+        # import) ships a `//go:build !cgo` stub specifically so a cgo-disabled
+        # build still compiles and runs — see felix/bpf/libbpf/libbpf_stub.go
+        # upstream. None of these four binaries need real BPF capability, so the
+        # simpler, faster, pure-Go build is the right one for them.
         #
-        # (An earlier version of this comment claimed felix/bpf/libbpf was a git
-        # submodule missed by a shallow clone. That was wrong — it isn't a
-        # submodule at all; libbpf is fetched by a Makefile-driven `git clone` of
-        # github.com/libbpf/libbpf at a pinned tag. See build-calico-felix.yaml,
-        # which does that fetch for real to build Felix itself.)
-        build_binary calicoctl ./cmd/calico
+        # Paths verified against the real tagged release tree, not assumed from
+        # a master-branch reading — master has since restructured towards a
+        # single `cmd/calico` combined binary that does not exist in any tagged
+        # release yet (see build-calico-node.yaml/build-calico-cni.yaml's
+        # comments). At a real release, calicoctl lives at calicoctl/calicoctl
+        # (a single-file main package alongside commands/resourcemgr/util
+        # subpackages) and Typha's entry point is typha/cmd/calico-typha, not
+        # typha/cmd/typha. The previous ./cmd/calico and ./typha/cmd/typha paths
+        # do not exist in any release tag, so build_binary's silent skip-if-
+        # missing fallback was quietly omitting both calicoctl and typha from
+        # every published tarball — confirmed against the already-published
+        # calico-3.32.2-riscv64-linux.tar.gz, which contains only
+        # kube-controllers and cni-plugin. All four paths below were verified
+        # with a real `go build` against the v3.32.2 tag before this fix.
+        build_binary calicoctl ./calicoctl/calicoctl
         build_binary cni-plugin ./cni-plugin/cmd/calico
         build_binary kube-controllers ./kube-controllers/cmd/kube-controllers
-        build_binary typha ./typha/cmd/typha
+        build_binary typha ./typha/cmd/calico-typha
 
         # apiserver is no longer a standalone main package upstream — its server
         # logic (apiserver/cmd/apiserver/server) is now built directly into
