@@ -220,9 +220,27 @@ jobs:
           # tooling upstream's node image carries, resolved via Debian's own
           # dependency graph rather than upstream's manual UBI/AlmaLinux RPM
           # chaining.
+          # libpcap0.8t64/libelf1t64/zlib1g: the actual runtime .so files for
+          # calico-node's own dynamic dependencies (readelf -d NEEDED:
+          # libpcap.so.0.8, libelf.so.1, libz.so.1 — libbpf itself is linked
+          # statically via libbpf.a, so it needs no runtime package). These
+          # are the RUNTIME libs, not the -dev/-headers packages this repo's
+          # build steps already install on the build runner — a build-time
+          # -dev package has no bearing on what the separate, minimal runtime
+          # image ships. Missing this was a real bug, not a theoretical one:
+          # confirmed by actually running the built calico-node binary inside
+          # a real riscv64 container (via Docker's qemu-riscv64 emulation)
+          # without these packages, which failed immediately with "error
+          # while loading shared libraries: libpcap.so.0.8: cannot open
+          # shared object file" — and confirmed fixed the same way, by
+          # rerunning `calico-node -v` successfully once they were added.
+          # Exact Debian trixie riscv64 package names were verified against
+          # the real Contents-riscv64.gz index, not guessed from Ubuntu's
+          # differently-versioned t64-suffix packages.
           RUN apt-get update && apt-get install -y --no-install-recommends \
                 runit iptables nftables conntrack ipset iproute2 net-tools \
                 kmod iputils-ping procps findutils debianutils ca-certificates \
+                libpcap0.8t64 libelf1t64 zlib1g \
               && rm -rf /var/lib/apt/lists/*
 
           # Debian's runit package creates /etc/service as its own symlink
@@ -417,6 +435,7 @@ jobs:
           RUN apt-get update && apt-get install -y --no-install-recommends \
                 runit iptables nftables conntrack ipset iproute2 net-tools \
                 kmod iputils-ping procps findutils debianutils ca-certificates \
+                libpcap0.8t64 libelf1t64 zlib1g \
               && rm -rf /var/lib/apt/lists/*
 
           # Debian's runit package creates /etc/service as its own symlink
